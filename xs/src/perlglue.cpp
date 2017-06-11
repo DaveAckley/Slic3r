@@ -6,6 +6,7 @@ namespace Slic3r {
 REGISTER_CLASS(ExPolygon, "ExPolygon");
 REGISTER_CLASS(ExPolygonCollection, "ExPolygon::Collection");
 REGISTER_CLASS(Extruder, "Extruder");
+REGISTER_CLASS(ExtrusionMultiPath, "ExtrusionMultiPath");
 REGISTER_CLASS(ExtrusionPath, "ExtrusionPath");
 REGISTER_CLASS(ExtrusionLoop, "ExtrusionLoop");
 // there is no ExtrusionLoop::Collection or ExtrusionEntity::Collection
@@ -13,13 +14,10 @@ REGISTER_CLASS(ExtrusionEntityCollection, "ExtrusionPath::Collection");
 REGISTER_CLASS(ExtrusionSimulator, "ExtrusionSimulator");
 REGISTER_CLASS(Filler, "Filler");
 REGISTER_CLASS(Flow, "Flow");
-REGISTER_CLASS(AvoidCrossingPerimeters, "GCode::AvoidCrossingPerimeters");
-REGISTER_CLASS(OozePrevention, "GCode::OozePrevention");
-REGISTER_CLASS(Wipe, "GCode::Wipe");
+REGISTER_CLASS(CoolingBuffer, "GCode::CoolingBuffer");
 REGISTER_CLASS(GCode, "GCode");
 REGISTER_CLASS(GCodeSender, "GCode::Sender");
 REGISTER_CLASS(GCodeWriter, "GCode::Writer");
-REGISTER_CLASS(GCodePressureEqualizer, "GCode::PressureEqualizer");
 REGISTER_CLASS(Layer, "Layer");
 REGISTER_CLASS(SupportLayer, "Layer::Support");
 REGISTER_CLASS(LayerRegion, "Layer::Region");
@@ -58,7 +56,9 @@ REGISTER_CLASS(Surface, "Surface");
 REGISTER_CLASS(SurfaceCollection, "Surface::Collection");
 REGISTER_CLASS(PrintObjectSupportMaterial, "Print::SupportMaterial2");
 REGISTER_CLASS(TriangleMesh, "TriangleMesh");
-REGISTER_CLASS(GLVertexArray, "GUI::_3DScene::GLVertexArray");
+REGISTER_CLASS(GLShader, "GUI::_3DScene::GLShader");
+REGISTER_CLASS(GLVolume, "GUI::_3DScene::GLVolume");
+REGISTER_CLASS(GLVolumeCollection, "GUI::_3DScene::GLVolume::Collection");
 
 SV*
 ConfigBase__as_hash(ConfigBase* THIS) {
@@ -95,6 +95,13 @@ ConfigOption_to_SV(const ConfigOption &opt, const ConfigOptionDef &def) {
     } else if (def.type == coPercent) {
         const ConfigOptionPercent* optv = dynamic_cast<const ConfigOptionPercent*>(&opt);
         return newSVnv(optv->value);
+    } else if (def.type == coPercents) {
+        const ConfigOptionPercents* optv = dynamic_cast<const ConfigOptionPercents*>(&opt);
+        AV* av = newAV();
+        av_fill(av, optv->values.size()-1);
+        for (const double &v : optv->values)
+            av_store(av, &v - &optv->values.front(), newSVnv(v));
+        return newRV_noinc((SV*)av);
     } else if (def.type == coInt) {
         const ConfigOptionInt* optv = dynamic_cast<const ConfigOptionInt*>(&opt);
         return newSViv(optv->value);
@@ -148,7 +155,7 @@ ConfigBase__get_at(ConfigBase* THIS, const t_config_option_key &opt_key, size_t 
     if (opt == NULL) return &PL_sv_undef;
     
     const ConfigOptionDef* def = THIS->def->get(opt_key);
-    if (def->type == coFloats) {
+    if (def->type == coFloats || def->type == coPercents) {
         ConfigOptionFloats* optv = dynamic_cast<ConfigOptionFloats*>(opt);
         return newSVnv(optv->get_at(i));
     } else if (def->type == coInts) {
@@ -182,6 +189,17 @@ ConfigBase__set(ConfigBase* THIS, const t_config_option_key &opt_key, SV* value)
         optv->value = SvNV(value);
     } else if (def->type == coFloats) {
         ConfigOptionFloats* optv = dynamic_cast<ConfigOptionFloats*>(opt);
+        std::vector<double> values;
+        AV* av = (AV*)SvRV(value);
+        const size_t len = av_len(av)+1;
+        for (size_t i = 0; i < len; i++) {
+            SV** elem = av_fetch(av, i, 0);
+            if (elem == NULL || !looks_like_number(*elem)) return false;
+            values.push_back(SvNV(*elem));
+        }
+        optv->values = values;
+    } else if (def->type == coPercents) {
+        ConfigOptionPercents* optv = dynamic_cast<ConfigOptionPercents*>(opt);
         std::vector<double> values;
         AV* av = (AV*)SvRV(value);
         const size_t len = av_len(av)+1;

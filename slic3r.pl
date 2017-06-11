@@ -13,6 +13,7 @@ use Getopt::Long qw(:config no_auto_abbrev);
 use List::Util qw(first);
 use POSIX qw(setlocale LC_NUMERIC);
 use Slic3r;
+use Slic3r::Geometry qw(deg2rad);
 use Time::HiRes qw(gettimeofday tv_interval);
 $|++;
 binmode STDOUT, ':utf8';
@@ -44,7 +45,7 @@ my %cli_options = ();
         'info'                  => \$opt{info},
         
         'scale=f'               => \$opt{scale},
-        'rotate=i'              => \$opt{rotate},
+        'rotate=f'              => \$opt{rotate},
         'duplicate=i'           => \$opt{duplicate},
         'duplicate-grid=s'      => \$opt{duplicate_grid},
         'print-center=s'        => \$opt{print_center},
@@ -171,7 +172,7 @@ if (@ARGV) {  # slicing from command line
             foreach my $new_mesh (@{$mesh->split}) {
                 my $output_file = sprintf '%s_%02d.stl', $file, ++$part_count;
                 printf "Writing to %s\n", basename($output_file);
-                Slic3r::Format::STL->write_file($output_file, $new_mesh, binary => 1);
+                $new_mesh->write_binary(Slic3r::encode_path($output_file));
             }
         }
         exit;
@@ -201,7 +202,7 @@ if (@ARGV) {  # slicing from command line
         
         my $sprint = Slic3r::Print::Simple->new(
             scale           => $opt{scale}          // 1,
-            rotate          => $opt{rotate}         // 0,
+            rotate          => deg2rad($opt{rotate} // 0),
             duplicate       => $opt{duplicate}      // 1,
             duplicate_grid  => $opt{duplicate_grid} // [1,1],
             print_center    => $opt{print_center}   // Slic3r::Pointf->new(100,100),
@@ -213,8 +214,11 @@ if (@ARGV) {  # slicing from command line
             output_file     => $opt{output},
         );
         
+        # This is delegated to C++ PrintObject::apply_config().
         $sprint->apply_config($config);
         $sprint->set_model($model);
+        # Do the apply_config once again to validate the layer height profiles at all the newly added PrintObjects.
+        $sprint->apply_config($config);
         
         if ($opt{export_svg}) {
             $sprint->export_svg;
@@ -298,16 +302,13 @@ $j
                         (default: 100,100)
     --z-offset          Additional height in mm to add to vertical coordinates
                         (+/-, default: $config->{z_offset})
-    --gcode-flavor      The type of G-code to generate (reprap/teacup/makerware/sailfish/mach3/machinekit/no-extrusion,
+    --gcode-flavor      The type of G-code to generate (reprap/teacup/repetier/makerware/sailfish/mach3/machinekit/smoothie/no-extrusion,
                         default: $config->{gcode_flavor})
     --use-relative-e-distances Enable this to get relative E values (default: no)
     --use-firmware-retraction  Enable firmware-controlled retraction using G10/G11 (default: no)
     --use-volumetric-e  Express E in cubic millimeters and prepend M200 (default: no)
-    --gcode-arcs        Use G2/G3 commands for native arcs (experimental, not supported
-                        by all firmwares)
+    --set-and-wait-temperatures Use M190 instead of M140 for temperature changes past the first (default: no)
     --gcode-comments    Make G-code verbose by adding comments (default: no)
-    --pressure-advance  Adjust pressure using the experimental advance algorithm (K constant,
-                        set zero to disable; default: $config->{pressure_advance})
     
   Filament options:
     --filament-diameter Diameter in mm of your raw filament (default: $config->{filament_diameter}->[0])
@@ -426,6 +427,9 @@ $j
                         Support material angle in degrees (range: 0-90, default: $config->{support_material_angle})
     --support-material-contact-distance
                         Vertical distance between object and support material (0+, default: $config->{support_material_contact_distance})
+    --support-material-xy-spacing
+                        "XY separation between an object and its support. If expressed as percentage (for example 50%),
+                        it will be calculated over external perimeter width (default: half of exteral perimeter width)
     --support-material-interface-layers
                         Number of perpendicular layers between support material and object (0+, default: $config->{support_material_interface_layers})
     --support-material-interface-spacing
@@ -442,6 +446,7 @@ $j
    Retraction options:
     --retract-length    Length of retraction in mm when pausing extrusion (default: $config->{retract_length}[0])
     --retract-speed     Speed for retraction in mm/s (default: $config->{retract_speed}[0])
+    --deretract-speed   Speed for deretraction (loading of filament after a retract) in mm/s (default: $config->{retract_speed}[0])
     --retract-restart-extra
                         Additional amount of filament in mm to push after
                         compensating retraction (default: $config->{retract_restart_extra}[0])
@@ -494,6 +499,9 @@ $j
     --dont-arrange      Don't arrange the objects on the build plate. The model coordinates
                         define the absolute positions on the build plate. 
                         The option --print-center will be ignored.
+    --clip_multipart_objects When printing multi-material objects, this settings will make slic3r to clip the overlapping 
+                        object parts one by the other (2nd part will be clipped by the 1st, 3rd part will be clipped 
+                        by the 1st and 2nd etc). (default: $config->{clip_multipart_objects})";
     --xy-size-compensation
                         Grow/shrink objects by the configured absolute distance (mm, default: $config->{xy_size_compensation})
    
@@ -537,9 +545,11 @@ $j
     --infill-extruder   Extruder to use for infill (1+, default: $config->{infill_extruder})
     --solid-infill-extruder   Extruder to use for solid infill (1+, default: $config->{solid_infill_extruder})
     --support-material-extruder
-                        Extruder to use for support material, raft and skirt (1+, default: $config->{support_material_extruder})
+                        Extruder to use for support material, raft and skirt 
+                        (1+, 0 to use the current extruder to minimize tool changes, default: $config->{support_material_extruder})
     --support-material-interface-extruder
-                        Extruder to use for support material interface (1+, default: $config->{support_material_interface_extruder})
+                        Extruder to use for support material interface 
+                        (1+, 0 to use the current extruder to minimize tool changes, default: $config->{support_material_interface_extruder})
     --ooze-prevention   Drop temperature and park extruders outside a full skirt for automatic wiping
                         (default: no)
     --standby-temperature-delta

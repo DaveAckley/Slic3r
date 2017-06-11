@@ -107,6 +107,11 @@ sub new_from_paths {
     return $loop;
 }
 
+package Slic3r::ExtrusionMultiPath;
+use overload
+    '@{}' => sub { $_[0]->arrayref },
+    'fallback' => 1;
+
 package Slic3r::ExtrusionPath;
 use overload
     '@{}' => sub { $_[0]->arrayref },
@@ -242,7 +247,14 @@ sub new {
     );
 }
 
-package Slic3r::GUI::_3DScene::GLVertexArray;
+package Slic3r::GUI::_3DScene::GLShader;
+sub CLONE_SKIP { 1 }
+
+package Slic3r::GUI::_3DScene::GLVolume::Collection;
+use overload
+    '@{}' => sub { $_[0]->arrayref },
+    'fallback' => 1;
+
 sub CLONE_SKIP { 1 }
 
 package main;
@@ -259,20 +271,19 @@ for my $class (qw(
         Slic3r::ExPolygon::Collection
         Slic3r::Extruder
         Slic3r::ExtrusionLoop
+        Slic3r::ExtrusionMultiPath
         Slic3r::ExtrusionPath
         Slic3r::ExtrusionPath::Collection
         Slic3r::ExtrusionSimulator
         Slic3r::Filler
         Slic3r::Flow
         Slic3r::GCode
-        Slic3r::GCode::AvoidCrossingPerimeters
-        Slic3r::GCode::OozePrevention
         Slic3r::GCode::PlaceholderParser
-        Slic3r::GCode::Wipe
         Slic3r::GCode::Writer
         Slic3r::Geometry::BoundingBox
         Slic3r::Geometry::BoundingBoxf
         Slic3r::Geometry::BoundingBoxf3
+        Slic3r::GUI::_3DScene::GLVolume
         Slic3r::Layer
         Slic3r::Layer::Region
         Slic3r::Layer::Support

@@ -839,6 +839,8 @@ void EdgeGrid::Grid::calculate_sdf()
 	}
 
 #if 0
+	static int iRun = 0;
+	++ iRun;
 //#ifdef SLIC3R_GUI
 	{ 
 		wxImage img(ncols, nrows);
@@ -862,7 +864,7 @@ void EdgeGrid::Grid::calculate_sdf()
 				}
 			}
 		}
-		img.SaveFile(debug_out_path("unsigned_df.png"), wxBITMAP_TYPE_PNG);
+		img.SaveFile(debug_out_path("unsigned_df-%d.png", iRun), wxBITMAP_TYPE_PNG);
 	}
 	{
 		wxImage img(ncols, nrows);
@@ -895,7 +897,7 @@ void EdgeGrid::Grid::calculate_sdf()
 				}
 			}
 		}
-		img.SaveFile(debug_out_path("signed_df.png"), wxBITMAP_TYPE_PNG);
+		img.SaveFile(debug_out_path("signed_df-%d.png", iRun), wxBITMAP_TYPE_PNG);
 	}
 #endif /* SLIC3R_GUI */
 
@@ -1020,7 +1022,7 @@ void EdgeGrid::Grid::calculate_sdf()
 				}
 			}
 		}
-		img.SaveFile(debug_out_path("signed_df-signs.png"), wxBITMAP_TYPE_PNG);
+		img.SaveFile(debug_out_path("signed_df-signs-%d.png", iRun), wxBITMAP_TYPE_PNG);
 	}
 #endif /* SLIC3R_GUI */
 
@@ -1049,7 +1051,7 @@ void EdgeGrid::Grid::calculate_sdf()
 				}
 			}
 		}
-		img.SaveFile(debug_out_path("signed_df2.png"), wxBITMAP_TYPE_PNG);
+		img.SaveFile(debug_out_path("signed_df2-%d.png", iRun), wxBITMAP_TYPE_PNG);
 	}
 #endif /* SLIC3R_GUI */
 }
@@ -1222,17 +1224,39 @@ bool EdgeGrid::Grid::signed_distance(const Point &pt, coord_t search_radius, coo
 	return true;
 }
 
-Polygons EdgeGrid::Grid::contours_simplified() const
+Polygons EdgeGrid::Grid::contours_simplified(coord_t offset) const
 {
 	typedef std::unordered_multimap<Point, int, PointHash> EndPointMapType;
+	// 0) Prepare a binary grid.
+	size_t cell_rows = m_rows + 2;
+	size_t cell_cols = m_cols + 2;
+	std::vector<char> cell_inside(cell_rows * cell_cols, false);
+	for (int r = 0; r < int(cell_rows); ++ r)
+		for (int c = 0; c < int(cell_cols); ++ c)
+			cell_inside[r * cell_cols + c] = cell_inside_or_crossing(r - 1, c - 1);
+	// Fill in empty cells, which have a left / right neighbor filled.
+	// Fill in empty cells, which have the top / bottom neighbor filled.
+	{
+		std::vector<char> cell_inside2(cell_inside);
+		for (int r = 1; r + 1 < int(cell_rows); ++ r) {
+			for (int c = 1; c + 1 < int(cell_cols); ++ c) {
+				int addr = r * cell_cols + c;
+				if ((cell_inside2[addr - 1] && cell_inside2[addr + 1]) ||
+					(cell_inside2[addr - cell_cols] && cell_inside2[addr + cell_cols]))
+					cell_inside[addr] = true;
+			}
+		}
+	}
+
 	// 1) Collect the lines.
 	std::vector<Line> lines;
 	EndPointMapType start_point_to_line_idx;
 	for (int r = 0; r <= int(m_rows); ++ r) {
 		for (int c = 0; c <= int(m_cols); ++ c) {
-			bool left    = cell_inside_or_crossing(r  , c-1);
-			bool top     = cell_inside_or_crossing(r-1, c  );
-			bool current = cell_inside_or_crossing(r  , c  );
+			int  addr    = (r + 1) * cell_cols + c + 1;
+			bool left    = cell_inside[addr - 1];
+			bool top     = cell_inside[addr - cell_cols];
+			bool current = cell_inside[addr];
 			if (left != current) {
 				lines.push_back(
 					left ? 
@@ -1312,7 +1336,6 @@ Polygons EdgeGrid::Grid::contours_simplified() const
 		// Remove collineaer points.
 		Points pts;
 		pts.reserve(poly.points.size());
-		coord_t downscale = 5;
 		for (size_t j = 0; j < poly.points.size(); ++ j) {
 			size_t j0 = (j == 0) ? poly.points.size() - 1 : j - 1;
 			size_t j2 = (j + 1 == poly.points.size()) ? 0 : j + 1;
@@ -1320,8 +1343,8 @@ Polygons EdgeGrid::Grid::contours_simplified() const
 			if (v.x != 0 && v.y != 0) {
 				// This is a corner point. Copy it to the output contour.
 				Point p = poly.points[j];
-				p.y += (v.x < 0) ? downscale : -downscale;
-				p.x += (v.y > 0) ? downscale : -downscale;
+				p.y += (v.x < 0) ? - offset : offset;
+				p.x += (v.y > 0) ? - offset : offset;
 				pts.push_back(p);
 			} 
 		}
@@ -1330,7 +1353,7 @@ Polygons EdgeGrid::Grid::contours_simplified() const
 	return out;
 }
 
-#ifdef SLIC3R_GUI
+#if 0
 void EdgeGrid::save_png(const EdgeGrid::Grid &grid, const BoundingBox &bbox, coord_t resolution, const char *path)
 {
 	unsigned int w = (bbox.max.x - bbox.min.x + resolution - 1) / resolution;
@@ -1343,17 +1366,18 @@ void EdgeGrid::save_png(const EdgeGrid::Grid &grid, const BoundingBox &bbox, coo
 	++iRun;
     
     const coord_t search_radius = grid.resolution() * 2;
-	const coord_t display_blend_radius = grid.resolution() * 5;
+	const coord_t display_blend_radius = grid.resolution() * 2;
 	for (coord_t r = 0; r < h; ++r) {
     	for (coord_t c = 0; c < w; ++ c) {
 			unsigned char *pxl = data + (((h - r - 1) * w) + c) * 3;
 			Point pt(c * resolution + bbox.min.x, r * resolution + bbox.min.y);
 			coordf_t min_dist;
-			bool on_segment;
-//			if (grid.signed_distance_edges(pt, search_radius, min_dist, &on_segment)) {
+			bool on_segment = true;
+			#if 0
+			if (grid.signed_distance_edges(pt, search_radius, min_dist, &on_segment)) {
+			#else
 			if (grid.signed_distance(pt, search_radius, min_dist)) {
-				//FIXME
-				on_segment = true;
+			#endif
 				float s = 255 * std::abs(min_dist) / float(display_blend_radius);
 				int is = std::max(0, std::min(255, int(floor(s + 0.5f))));
 				if (min_dist < 0) {
@@ -1362,9 +1386,9 @@ void EdgeGrid::save_png(const EdgeGrid::Grid &grid, const BoundingBox &bbox, coo
 						pxl[1] = 255 - is;
 						pxl[2] = 255 - is;
 					} else {
-						pxl[0] = 128;
-						pxl[1] = 128;
-						pxl[2] = 255 - is;						
+						pxl[0] = 255;
+						pxl[1] = 0;
+						pxl[2] = 255 - is;
 					}
 				}
 				else {

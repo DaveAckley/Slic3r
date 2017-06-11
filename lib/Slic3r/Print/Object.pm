@@ -14,11 +14,6 @@ use Slic3r::Surface ':types';
 # If enabled, phases of prepare_infill will be written into SVG files to an "out" directory.
 our $SLIC3R_DEBUG_SLICE_PROCESSING = 0;
 
-sub region_volumes {
-    my $self = shift;
-    return [ map $self->get_region_volumes($_), 0..($self->region_count - 1) ];
-}
-
 sub layers {
     my $self = shift;
     return [ map $self->get_layer($_), 0..($self->layer_count - 1) ];
@@ -46,70 +41,13 @@ sub slice {
     $self->print->status_cb->(10, "Processing triangulated mesh");
     
     $self->_slice;
-    
-    # detect slicing errors
-    my $warning_thrown = 0;
-    for my $i (0 .. ($self->layer_count - 1)) {
-        my $layer = $self->get_layer($i);
-        next unless $layer->slicing_errors;
-        if (!$warning_thrown) {
-            warn "The model has overlapping or self-intersecting facets. I tried to repair it, "
-                . "however you might want to check the results or repair the input file and retry.\n";
-            $warning_thrown = 1;
-        }
-        
-        # try to repair the layer surfaces by merging all contours and all holes from
-        # neighbor layers
-        Slic3r::debugf "Attempting to repair layer %d\n", $i;
-        
-        foreach my $region_id (0 .. ($layer->region_count - 1)) {
-            my $layerm = $layer->region($region_id);
-            
-            my (@upper_surfaces, @lower_surfaces);
-            for (my $j = $i+1; $j < $self->layer_count; $j++) {
-                if (!$self->get_layer($j)->slicing_errors) {
-                    @upper_surfaces = @{$self->get_layer($j)->region($region_id)->slices};
-                    last;
-                }
-            }
-            for (my $j = $i-1; $j >= 0; $j--) {
-                if (!$self->get_layer($j)->slicing_errors) {
-                    @lower_surfaces = @{$self->get_layer($j)->region($region_id)->slices};
-                    last;
-                }
-            }
-            
-            my $union = union_ex([
-                map $_->expolygon->contour, @upper_surfaces, @lower_surfaces,
-            ]);
-            my $diff = diff_ex(
-                [ map @$_, @$union ],
-                [ map @{$_->expolygon->holes}, @upper_surfaces, @lower_surfaces, ],
-            );
-            
-            $layerm->slices->clear;
-            $layerm->slices->append($_)
-                for map Slic3r::Surface->new
-                    (expolygon => $_, surface_type => S_TYPE_INTERNAL),
-                    @$diff;
-        }
-            
-        # update layer slices after repairing the single regions
-        $layer->make_slices;
-    }
-    
-    # remove empty layers from bottom
-    while (@{$self->layers} && !@{$self->get_layer(0)->slices}) {
-        $self->delete_layer(0);
-        for (my $i = 0; $i <= $#{$self->layers}; $i++) {
-            $self->get_layer($i)->set_id( $self->get_layer($i)->id-1 );
-        }
-    }
-    
+
+    my $warning = $self->_fix_slicing_errors;
+    warn $warning if (defined($warning) && $warning ne '');
+
     # simplify slices if required
-    if ($self->print->config->resolution) {
-        $self->_simplify_slices(scale($self->print->config->resolution));
-    }
+    $self->_simplify_slices(scale($self->print->config->resolution))
+        if ($self->print->config->resolution);
     
     die "No layers were detected. You might want to repair your STL file(s) or check their size or thickness and retry.\n"
         if !@{$self->layers};
@@ -126,7 +64,11 @@ sub make_perimeters {
     
     # prerequisites
     $self->slice;
-    $self->_make_perimeters;
+
+    if (! $self->step_done(STEP_PERIMETERS)) {
+        $self->print->status_cb->(20, "Generating perimeters");
+        $self->_make_perimeters;
+    }
 }
 
 sub prepare_infill {
@@ -150,6 +92,7 @@ sub prepare_infill {
     # Decide what surfaces are to be filled.
     # Here the S_TYPE_TOP / S_TYPE_BOTTOMBRIDGE / S_TYPE_BOTTOM infill is turned to just S_TYPE_INTERNAL if zero top / bottom infill layers are configured.
     # Also tiny S_TYPE_INTERNAL surfaces are turned to S_TYPE_INTERNAL_SOLID.
+#    BOOST_LOG_TRIVIAL(info) << "Preparing fill surfaces...";
     $_->prepare_fill_surfaces for map @{$_->regions}, @{$self->layers};
 
     # this will detect bridges and reverse bridges
@@ -260,42 +203,15 @@ sub generate_support_material {
     
     $self->clear_support_layers;
     
-    if ((!$self->config->support_material && $self->config->raft_layers == 0) || scalar(@{$self->layers}) < 2) {
-        $self->set_step_done(STEP_SUPPORTMATERIAL);
-        return;
+    if (($self->config->support_material || $self->config->raft_layers > 0) && scalar(@{$self->layers}) > 1) {
+        $self->print->status_cb->(85, "Generating support material");    
+        # New supports, C++ implementation.
+        $self->_generate_support_material;
     }
-    $self->print->status_cb->(85, "Generating support material");
-    
-    $self->_support_material->generate($self);
     
     $self->set_step_done(STEP_SUPPORTMATERIAL);
-}
-
-sub _support_material {
-    my ($self) = @_;
-    
-    my $first_layer_flow = Slic3r::Flow->new_from_width(
-        width               => ($self->print->config->first_layer_extrusion_width || $self->config->support_material_extrusion_width),
-        role                => FLOW_ROLE_SUPPORT_MATERIAL,
-        nozzle_diameter     => $self->print->config->nozzle_diameter->[ $self->config->support_material_extruder-1 ]
-                                // $self->print->config->nozzle_diameter->[0],
-        layer_height        => $self->config->get_abs_value('first_layer_height'),
-        bridge_flow_ratio   => 0,
-    );
-    
-    if (1) {
-        # Old supports, Perl implementation.
-        return Slic3r::Print::SupportMaterial->new(
-            print_config        => $self->print->config,
-            object_config       => $self->config,
-            first_layer_flow    => $first_layer_flow,
-            flow                => $self->support_material_flow,
-            interface_flow      => $self->support_material_flow(FLOW_ROLE_SUPPORT_MATERIAL_INTERFACE),
-        );
-    } else {
-        # New supports, C++ implementation.
-        return Slic3r::Print::SupportMaterial2->new($self);
-    }
+    my $stats = sprintf "Weight: %.1fg, Cost: %.1f" , $self->print->total_weight, $self->print->total_cost;
+    $self->print->status_cb->(85, $stats);
 }
 
 # Idempotence of this method is guaranteed by the fact that we don't remove things from
@@ -722,37 +638,6 @@ sub combine_infill {
             }
         }
     }
-}
-
-# Simplify the sliced model, if "resolution" configuration parameter > 0.
-# The simplification is problematic, because it simplifies the slices independent from each other,
-# which makes the simplified discretization visible on the object surface.
-sub _simplify_slices {
-    my ($self, $distance) = @_;
-    
-    foreach my $layer (@{$self->layers}) {
-        $layer->slices->simplify($distance);
-        $_->slices->simplify($distance) for @{$layer->regions};
-    }
-}
-
-sub support_material_flow {
-    my ($self, $role) = @_;
-    
-    $role //= FLOW_ROLE_SUPPORT_MATERIAL;
-    my $extruder = ($role == FLOW_ROLE_SUPPORT_MATERIAL)
-        ? $self->config->support_material_extruder
-        : $self->config->support_material_interface_extruder;
-    
-    # we use a bogus layer_height because we use the same flow for all
-    # support material layers
-    return Slic3r::Flow->new_from_width(
-        width               => $self->config->support_material_extrusion_width || $self->config->extrusion_width,
-        role                => $role,
-        nozzle_diameter     => $self->print->config->nozzle_diameter->[$extruder-1] // $self->print->config->nozzle_diameter->[0],
-        layer_height        => $self->config->layer_height,
-        bridge_flow_ratio   => 0,
-    );
 }
 
 1;

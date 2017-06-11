@@ -52,18 +52,24 @@ sub new {
     });
     EVT_KEY_DOWN($canvas, sub {
         my ($s, $event) = @_;
-        my $key = $event->GetKeyCode;
-        if ($key == ord('D') || $key == WXK_LEFT) {
-            # Keys: 'D' or WXK_LEFT
-            $slider->SetValue($slider->GetValue - 1);
-            $self->set_z($self->{layers_z}[$slider->GetValue]);
-        } elsif ($key == ord('U') || $key == WXK_RIGHT) {
-            # Keys: 'U' or WXK_RIGHT
-            $slider->SetValue($slider->GetValue + 1);
-            $self->set_z($self->{layers_z}[$slider->GetValue]);
-        } elsif ($key >= ord('1') && $key <= ord('3')) {
-            # Keys: '1' to '3'
-            $canvas->set_simulation_mode($key - ord('1'));
+        if ($event->HasModifiers) {
+            $event->Skip;
+        } else {
+            my $key = $event->GetKeyCode;
+            if ($key == ord('D') || $key == WXK_LEFT) {
+                # Keys: 'D' or WXK_LEFT
+                $slider->SetValue($slider->GetValue - 1);
+                $self->set_z($self->{layers_z}[$slider->GetValue]);
+            } elsif ($key == ord('U') || $key == WXK_RIGHT) {
+                # Keys: 'U' or WXK_RIGHT
+                $slider->SetValue($slider->GetValue + 1);
+                $self->set_z($self->{layers_z}[$slider->GetValue]);
+            } elsif ($key >= ord('1') && $key <= ord('3')) {
+                # Keys: '1' to '3'
+                $canvas->set_simulation_mode($key - ord('1'));
+            } else {
+                $event->Skip;
+            }
         }
     });
 
@@ -475,7 +481,6 @@ sub Render {
             if ($layer->isa('Slic3r::Layer::Support')) {
                 $self->color([0, 0, 0]);
                 $self->_draw($object, $print_z, $_) for @{$layer->support_fills};
-                $self->_draw($object, $print_z, $_) for @{$layer->support_interface_fills};
             }
         }
     }
@@ -488,7 +493,7 @@ sub Render {
 sub _draw {
     my ($self, $object, $print_z, $path) = @_;
     
-    my @paths = $path->isa('Slic3r::ExtrusionLoop')
+    my @paths = ($path->isa('Slic3r::ExtrusionLoop') || $path->isa('Slic3r::ExtrusionMultiPath'))
         ? @$path
         : ($path);
     
@@ -546,7 +551,7 @@ sub _simulate_extrusion {
                     push @extrusions, @$_ for @{$layerm->fills};
                 }
                 foreach my $extrusion_entity (@extrusions) {
-                    my @paths = $extrusion_entity->isa('Slic3r::ExtrusionLoop')
+                    my @paths = ($extrusion_entity->isa('Slic3r::ExtrusionLoop') || $extrusion_entity->isa('Slic3r::ExtrusionMultiPath'))
                         ? @$extrusion_entity
                         : ($extrusion_entity);
                     foreach my $path (@paths) {

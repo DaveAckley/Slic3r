@@ -7,6 +7,8 @@
 
 namespace Slic3r {
 
+class PrintObject;
+
 // Extra spacing of bridge threads, in mm.
 #define BRIDGE_EXTRA_SPACING 0.05
 
@@ -45,15 +47,9 @@ public:
     float spacing() const;
     float spacing(const Flow &other) const;
     double mm3_per_mm() const;
-    coord_t scaled_width() const {
-        return scale_(this->width);
-    };
-    coord_t scaled_spacing() const {
-        return scale_(this->spacing());
-    };
-    coord_t scaled_spacing(const Flow &other) const {
-        return scale_(this->spacing(other));
-    };
+    coord_t scaled_width() const { return coord_t(scale_(this->width)); };
+    coord_t scaled_spacing() const { return coord_t(scale_(this->spacing())); };
+    coord_t scaled_spacing(const Flow &other) const { return coord_t(scale_(this->spacing(other))); };
     
     static Flow new_from_config_width(FlowRole role, const ConfigOptionFloatOrPercent &width, float nozzle_diameter, float height, float bridge_flow_ratio);
     static Flow new_from_spacing(float spacing, float nozzle_diameter, float height, bool bridge);
@@ -64,6 +60,10 @@ public:
     static float _width_from_spacing(float spacing, float nozzle_diameter, float height, bool bridge);
     static float _spacing(float width, float nozzle_diameter, float height, float bridge_flow_ratio);
 };
+
+extern Flow support_material_flow(const PrintObject *object, float layer_height = 0.f);
+extern Flow support_material_1st_layer_flow(const PrintObject *object, float layer_height = 0.f);
+extern Flow support_material_interface_flow(const PrintObject *object, float layer_height = 0.f);
 
 }
 

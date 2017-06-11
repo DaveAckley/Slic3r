@@ -5,12 +5,6 @@
 
 namespace Slic3r {
 
-ExtrusionEntityCollection::ExtrusionEntityCollection(const ExtrusionEntityCollection& collection)
-    : orig_indices(collection.orig_indices), no_sort(collection.no_sort)
-{
-    this->append(collection.entities);
-}
-
 ExtrusionEntityCollection::ExtrusionEntityCollection(const ExtrusionPaths &paths)
     : no_sort(false)
 {
@@ -28,7 +22,7 @@ ExtrusionEntityCollection& ExtrusionEntityCollection::operator= (const Extrusion
 }
 
 void
-ExtrusionEntityCollection::swap (ExtrusionEntityCollection &c)
+ExtrusionEntityCollection::swap(ExtrusionEntityCollection &c)
 {
     std::swap(this->entities, c.entities);
     std::swap(this->orig_indices, c.orig_indices);
@@ -73,20 +67,6 @@ ExtrusionEntityCollection::reverse()
 }
 
 void
-ExtrusionEntityCollection::append(const ExtrusionEntitiesPtr &entities)
-{
-    for (ExtrusionEntitiesPtr::const_iterator ptr = entities.begin(); ptr != entities.end(); ++ptr)
-        this->append(**ptr);
-}
-
-void
-ExtrusionEntityCollection::append(const ExtrusionPaths &paths)
-{
-    for (ExtrusionPaths::const_iterator path = paths.begin(); path != paths.end(); ++path)
-        this->append(*path);
-}
-
-void
 ExtrusionEntityCollection::replace(size_t i, const ExtrusionEntity &entity)
 {
     delete this->entities[i];
@@ -101,22 +81,28 @@ ExtrusionEntityCollection::remove(size_t i)
 }
 
 ExtrusionEntityCollection
-ExtrusionEntityCollection::chained_path(bool no_reverse, std::vector<size_t>* orig_indices) const
+ExtrusionEntityCollection::chained_path(bool no_reverse, ExtrusionRole role) const
 {
     ExtrusionEntityCollection coll;
-    this->chained_path(&coll, no_reverse, orig_indices);
+    this->chained_path(&coll, no_reverse, role);
     return coll;
 }
 
 void
-ExtrusionEntityCollection::chained_path(ExtrusionEntityCollection* retval, bool no_reverse, std::vector<size_t>* orig_indices) const
+ExtrusionEntityCollection::chained_path(ExtrusionEntityCollection* retval, bool no_reverse, ExtrusionRole role, std::vector<size_t>* orig_indices) const
 {
     if (this->entities.empty()) return;
-    this->chained_path_from(this->entities.front()->first_point(), retval, no_reverse, orig_indices);
+    this->chained_path_from(this->entities.front()->first_point(), retval, no_reverse, role, orig_indices);
 }
 
-void
-ExtrusionEntityCollection::chained_path_from(Point start_near, ExtrusionEntityCollection* retval, bool no_reverse, std::vector<size_t>* orig_indices) const
+ExtrusionEntityCollection ExtrusionEntityCollection::chained_path_from(Point start_near, bool no_reverse, ExtrusionRole role) const
+{
+    ExtrusionEntityCollection coll;
+    this->chained_path_from(start_near, &coll, no_reverse, role);
+    return coll;
+}
+
+void ExtrusionEntityCollection::chained_path_from(Point start_near, ExtrusionEntityCollection* retval, bool no_reverse, ExtrusionRole role, std::vector<size_t>* orig_indices) const
 {
     if (this->no_sort) {
         *retval = *this;
@@ -130,6 +116,15 @@ ExtrusionEntityCollection::chained_path_from(Point start_near, ExtrusionEntityCo
     
     ExtrusionEntitiesPtr my_paths;
     for (ExtrusionEntitiesPtr::const_iterator it = this->entities.begin(); it != this->entities.end(); ++it) {
+        if (role != erMixed) {
+            // The caller wants only paths with a specific extrusion role.
+            auto role2 = (*it)->role();
+            if (role != role2) {
+                // This extrusion entity does not match the role asked.
+                assert(role2 != erMixed);
+                continue;
+            }
+        }
         ExtrusionEntity* entity = (*it)->clone();
         my_paths.push_back(entity);
         if (orig_indices != NULL) indices_map[entity] = it - this->entities.begin();

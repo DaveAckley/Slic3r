@@ -45,6 +45,32 @@ Model::add_object()
 }
 
 ModelObject*
+Model::add_object(const char *name, const char *path, const TriangleMesh &mesh)
+{
+    ModelObject* new_object = new ModelObject(this);
+    this->objects.push_back(new_object);
+    new_object->name = name;
+    new_object->input_file = path;
+    ModelVolume *new_volume = new_object->add_volume(mesh);
+    new_volume->name = name;
+    new_object->invalidate_bounding_box();
+    return new_object;
+}
+
+ModelObject*
+Model::add_object(const char *name, const char *path, TriangleMesh &&mesh)
+{
+    ModelObject* new_object = new ModelObject(this);
+    this->objects.push_back(new_object);
+    new_object->name = name;
+    new_object->input_file = path;
+    ModelVolume *new_volume = new_object->add_volume(std::move(mesh));
+    new_volume->name = name;
+    new_object->invalidate_bounding_box();
+    return new_object;
+}
+
+ModelObject*
 Model::add_object(const ModelObject &other, bool copy_volumes)
 {
     ModelObject* new_object = new ModelObject(this, other, copy_volumes);
@@ -329,8 +355,10 @@ ModelMaterial::apply(const t_model_material_attributes &attributes)
 }
 
 
-ModelObject::ModelObject(Model *model)
-    : model(model), _bounding_box_valid(false)
+ModelObject::ModelObject(Model *model) : 
+    model(model), 
+    _bounding_box_valid(false),
+    layer_height_profile_valid(false)
 {}
 
 ModelObject::ModelObject(Model *model, const ModelObject &other, bool copy_volumes)
@@ -340,6 +368,8 @@ ModelObject::ModelObject(Model *model, const ModelObject &other, bool copy_volum
     volumes(),
     config(other.config),
     layer_height_ranges(other.layer_height_ranges),
+    layer_height_profile(other.layer_height_profile),
+    layer_height_profile_valid(other.layer_height_profile_valid),
     origin_translation(other.origin_translation),
     _bounding_box(other._bounding_box),
     _bounding_box_valid(other._bounding_box_valid),
@@ -356,7 +386,7 @@ ModelObject::ModelObject(Model *model, const ModelObject &other, bool copy_volum
         this->add_instance(**i);
 }
 
-ModelObject& ModelObject::operator= (ModelObject other)
+ModelObject& ModelObject::operator=(ModelObject other)
 {
     this->swap(other);
     return *this;
@@ -370,6 +400,8 @@ ModelObject::swap(ModelObject &other)
     std::swap(this->volumes,                other.volumes);
     std::swap(this->config,                 other.config);
     std::swap(this->layer_height_ranges,    other.layer_height_ranges);
+    std::swap(this->layer_height_profile,   other.layer_height_profile);
+    std::swap(this->layer_height_profile_valid,    other.layer_height_profile_valid);
     std::swap(this->origin_translation,     other.origin_translation);
     std::swap(this->_bounding_box,          other._bounding_box);
     std::swap(this->_bounding_box_valid,    other._bounding_box_valid);
@@ -385,6 +417,15 @@ ModelVolume*
 ModelObject::add_volume(const TriangleMesh &mesh)
 {
     ModelVolume* v = new ModelVolume(this, mesh);
+    this->volumes.push_back(v);
+    this->invalidate_bounding_box();
+    return v;
+}
+
+ModelVolume*
+ModelObject::add_volume(TriangleMesh &&mesh)
+{
+    ModelVolume* v = new ModelVolume(this, std::move(mesh));
     this->volumes.push_back(v);
     this->invalidate_bounding_box();
     return v;
@@ -656,6 +697,8 @@ ModelObject::cut(coordf_t z, Model* model) const
     ModelObject* lower = model->add_object(*this);
     upper->clear_volumes();
     lower->clear_volumes();
+    upper->input_file = "";
+    lower->input_file = "";
     
     for (ModelVolumePtrs::const_iterator v = this->volumes.begin(); v != this->volumes.end(); ++v) {
         ModelVolume* volume = *v;
@@ -664,10 +707,35 @@ ModelObject::cut(coordf_t z, Model* model) const
             upper->add_volume(*volume);
             lower->add_volume(*volume);
         } else {
-            TriangleMeshSlicer tms(&volume->mesh);
             TriangleMesh upper_mesh, lower_mesh;
             // TODO: shouldn't we use object bounding box instead of per-volume bb?
-            tms.cut(z + volume->mesh.bounding_box().min.z, &upper_mesh, &lower_mesh);
+            coordf_t cut_z = z + volume->mesh.bounding_box().min.z;
+            if (false) {
+//            if (volume->mesh.has_multiple_patches()) {
+                // Cutting algorithm does not work on intersecting meshes.
+                // As we are not sure whether the meshes don't intersect,
+                // we rather split the mesh into multiple non-intersecting pieces.
+                TriangleMeshPtrs meshptrs = volume->mesh.split();
+                for (TriangleMeshPtrs::iterator mesh = meshptrs.begin(); mesh != meshptrs.end(); ++mesh) {
+                    printf("Cutting mesh patch %d of %d\n", size_t(mesh - meshptrs.begin()));
+                    (*mesh)->repair();
+                    TriangleMeshSlicer tms(*mesh);
+                    if (mesh == meshptrs.begin()) {
+                        tms.cut(cut_z, &upper_mesh, &lower_mesh);
+                    } else {
+                        TriangleMesh upper_mesh_this, lower_mesh_this;
+                        tms.cut(cut_z, &upper_mesh_this, &lower_mesh_this);
+                        upper_mesh.merge(upper_mesh_this);
+                        lower_mesh.merge(lower_mesh_this);
+                    }
+                    delete *mesh;
+                }
+            } else {
+                printf("Cutting mesh patch\n");
+                TriangleMeshSlicer tms(&volume->mesh);
+                tms.cut(cut_z, &upper_mesh, &lower_mesh);
+            }
+
             upper_mesh.repair();
             lower_mesh.repair();
             upper_mesh.reset_repair_stats();
@@ -705,6 +773,7 @@ ModelObject::split(ModelObjectPtrs* new_objects)
         (*mesh)->repair();
         
         ModelObject* new_object = this->model->add_object(*this, false);
+        new_object->input_file  = "";
         ModelVolume* new_volume = new_object->add_volume(**mesh);
         new_volume->name        = volume->name;
         new_volume->config      = volume->config;
@@ -721,6 +790,10 @@ ModelObject::split(ModelObjectPtrs* new_objects)
 
 ModelVolume::ModelVolume(ModelObject* object, const TriangleMesh &mesh)
 :   mesh(mesh), modifier(false), object(object)
+{}
+
+ModelVolume::ModelVolume(ModelObject* object, TriangleMesh &&mesh)
+:   mesh(std::move(mesh)), modifier(false), object(object)
 {}
 
 ModelVolume::ModelVolume(ModelObject* object, const ModelVolume &other)

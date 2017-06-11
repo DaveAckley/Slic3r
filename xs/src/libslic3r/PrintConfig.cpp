@@ -96,6 +96,12 @@ PrintConfigDef::PrintConfigDef()
     def->min = 0;
     def->default_value = new ConfigOptionFloat(0);
 
+    def = this->add("clip_multipart_objects", coBool);
+    def->label = "Clip multi-part objects";
+    def->tooltip = "When printing multi-material objects, this settings will make slic3r to clip the overlapping object parts one by the other (2nd part will be clipped by the 1st, 3rd part will be clipped by the 1st and 2nd etc).";
+    def->cli = "clip-multipart-objects!";
+    def->default_value = new ConfigOptionBool(false);
+
     def = this->add("complete_objects", coBool);
     def->label = "Complete individual objects";
     def->tooltip = "When printing multiple objects or copies, this feature will complete each object before moving onto next one (and starting it from its bottom layer). This feature is useful to avoid the risk of ruined prints. Slic3r should warn and prevent you from extruder collisions, but beware.";
@@ -149,6 +155,19 @@ PrintConfigDef::PrintConfigDef()
     def->full_width = true;
     def->height = 120;
     def->default_value = new ConfigOptionString("M104 S0 ; turn off temperature\nG28 X0  ; home X axis\nM84     ; disable motors\n");
+
+    def = this->add("end_filament_gcode", coStrings);
+    def->label = "End G-code";
+    def->tooltip = "This end procedure is inserted at the end of the output file, before the printer end gcode. Note that you can use placeholder variables for all Slic3r settings. If you have multiple extruders, the gcode is processed in extruder order.";
+    def->cli = "end-filament-gcode=s@";
+    def->multiline = true;
+    def->full_width = true;
+    def->height = 120;
+    {
+        ConfigOptionStrings* opt = new ConfigOptionStrings();
+        opt->values.push_back("; Filament-specific end gcode \n;END gcode for filament\n");
+        def->default_value = opt;
+    }
 
     def = this->add("ensure_vertical_shell_thickness", coBool);
     def->label = "Ensure vertical shell thickness";
@@ -204,7 +223,7 @@ PrintConfigDef::PrintConfigDef()
     def = this->add("extra_perimeters", coBool);
     def->label = "Extra perimeters if needed";
     def->category = "Layers and Perimeters";
-    def->tooltip = "Add more perimeters when needed for avoiding gaps in sloping walls.";
+    def->tooltip = "Add more perimeters when needed for avoiding gaps in sloping walls. Slic3r keeps adding perimeters, until more than 70% of the loop immediately above is supported.";
     def->cli = "extra-perimeters!";
     def->default_value = new ConfigOptionBool(true);
 
@@ -236,6 +255,19 @@ PrintConfigDef::PrintConfigDef()
     def->cli = "extruder-clearance-radius=f";
     def->min = 0;
     def->default_value = new ConfigOptionFloat(20);
+
+    def = this->add("extruder_colour", coStrings);
+    def->label = "Extruder Color";
+    def->tooltip = "This is only used in the Slic3r interface as a visual help.";
+    def->cli = "extruder-color=s@";
+    def->gui_type = "color";
+    {
+        ConfigOptionStrings* opt = new ConfigOptionStrings();
+        // Empty string means no color assigned yet.
+//        opt->values.push_back("#FFFFFF");
+        opt->values.push_back("");
+        def->default_value = opt;
+    }
 
     def = this->add("extruder_offset", coPoints);
     def->label = "Extruder offset";
@@ -335,6 +367,61 @@ PrintConfigDef::PrintConfigDef()
         opt->values.push_back(3);
         def->default_value = opt;
     }
+
+    def = this->add("filament_density", coFloats);
+    def->label = "Density";
+    def->tooltip = "Enter your filament density here. This is only for statistical information. A decent way is to weigh a known length of filament and compute the ratio of the length to volume. Better is to calculate the volume directly through displacement.";
+    def->sidetext = "g/cm^3";
+    def->cli = "filament-density=f@";
+    def->min = 0;
+    {
+        ConfigOptionFloats* opt = new ConfigOptionFloats();
+        opt->values.push_back(0);
+        def->default_value = opt;
+    }
+
+    def = this->add("filament_type", coStrings);
+    def->label = "Filament type";
+    def->tooltip = "If you want to process the output G-code through custom scripts, just list their absolute paths here. Separate multiple scripts with a semicolon. Scripts will be passed the absolute path to the G-code file as the first argument, and they can access the Slic3r config settings by reading environment variables.";
+    def->cli = "filament_type=s@";
+    def->gui_type = "f_enum_open";
+    def->gui_flags = "show_value";
+    def->enum_values.push_back("PLA");
+    def->enum_values.push_back("ABS");
+    def->enum_values.push_back("PET");
+    def->enum_values.push_back("HIPS");
+    def->enum_values.push_back("FLEX");
+    def->enum_values.push_back("SCAFF");
+    def->enum_values.push_back("EDGE");
+    def->enum_values.push_back("NGEN");
+    def->enum_values.push_back("PVA");
+    {
+        ConfigOptionStrings* opt = new ConfigOptionStrings();
+        opt->values.push_back("PLA");
+        def->default_value = opt;
+    }
+
+    def = this->add("filament_soluble", coBools);
+    def->label = "Soluble material";
+    def->tooltip = "Soluble material is most likely used for a soluble support.";
+    def->cli = "filament-soluble!";
+    {
+        ConfigOptionBools* opt = new ConfigOptionBools();
+        opt->values.push_back(false);
+        def->default_value = opt;
+    }
+
+    def = this->add("filament_cost", coFloats);
+    def->label = "Cost";
+    def->tooltip = "Enter your filament cost per kg here. This is only for statistical information.";
+    def->sidetext = "money/kg";
+    def->cli = "filament-cost=f@";
+    def->min = 0;
+    {
+        ConfigOptionFloats* opt = new ConfigOptionFloats();
+        opt->values.push_back(0);
+        def->default_value = opt;
+    }
     
     def = this->add("filament_settings_id", coString);
     def->default_value = new ConfigOptionString("");
@@ -419,7 +506,7 @@ PrintConfigDef::PrintConfigDef()
     def->enum_labels.push_back("Hilbert Curve");
     def->enum_labels.push_back("Archimedean Chords");
     def->enum_labels.push_back("Octagram Spiral");
-    def->default_value = new ConfigOptionEnum<InfillPattern>(ipHoneycomb);
+    def->default_value = new ConfigOptionEnum<InfillPattern>(ipStars);
 
     def = this->add("first_layer_acceleration", coFloat);
     def->label = "First layer";
@@ -484,12 +571,6 @@ PrintConfigDef::PrintConfigDef()
     def->min = 0;
     def->default_value = new ConfigOptionFloat(20);
 
-    def = this->add("gcode_arcs", coBool);
-    def->label = "Use native G-code arcs";
-    def->tooltip = "This experimental feature tries to detect arcs from segments and generates G2/G3 arc commands instead of multiple straight G1 commands.";
-    def->cli = "gcode-arcs!";
-    def->default_value = new ConfigOptionBool(0);
-
     def = this->add("gcode_comments", coBool);
     def->label = "Verbose G-code";
     def->tooltip = "Enable this to get a commented G-code file, with each line explained by a descriptive text. If you print from SD card, the additional weight of the file could make your firmware slow down.";
@@ -502,18 +583,22 @@ PrintConfigDef::PrintConfigDef()
     def->cli = "gcode-flavor=s";
     def->enum_keys_map = ConfigOptionEnum<GCodeFlavor>::get_enum_values();
     def->enum_values.push_back("reprap");
+    def->enum_values.push_back("repetier");
     def->enum_values.push_back("teacup");
     def->enum_values.push_back("makerware");
     def->enum_values.push_back("sailfish");
     def->enum_values.push_back("mach3");
     def->enum_values.push_back("machinekit");
+    def->enum_values.push_back("smoothie");
     def->enum_values.push_back("no-extrusion");
-    def->enum_labels.push_back("RepRap (Marlin/Sprinter/Repetier)");
+    def->enum_labels.push_back("RepRap (Marlin/Sprinter)");
+    def->enum_labels.push_back("Repetier");
     def->enum_labels.push_back("Teacup");
     def->enum_labels.push_back("MakerWare (MakerBot)");
     def->enum_labels.push_back("Sailfish (MakerBot)");
     def->enum_labels.push_back("Mach3/LinuxCNC");
     def->enum_labels.push_back("Machinekit");
+    def->enum_labels.push_back("Smoothie");
     def->enum_labels.push_back("No extrusion");
     def->default_value = new ConfigOptionEnum<GCodeFlavor>(gcfRepRap);
 
@@ -571,7 +656,7 @@ PrintConfigDef::PrintConfigDef()
     def->sidetext = "mm or %";
     def->cli = "infill-overlap=s";
     def->ratio_over = "perimeter_extrusion_width";
-    def->default_value = new ConfigOptionFloatOrPercent(15, true);
+    def->default_value = new ConfigOptionFloatOrPercent(55, true);
 
     def = this->add("infill_speed", coFloat);
     def->label = "Infill";
@@ -618,6 +703,18 @@ PrintConfigDef::PrintConfigDef()
     def->max = 100;
     def->default_value = new ConfigOptionInt(100);
 
+    def = this->add("max_layer_height", coFloats);
+    def->label = "Max";
+    def->tooltip = "This is the highest printable layer height for this extruder, used to cap the variable layer height and support layer height. Maximum recommended layer height is 75% of the extrusion width to achieve reasonable inter-layer adhesion. If set to 0, layer height is limited to 75% of the nozzle diameter.";
+    def->sidetext = "mm";
+    def->cli = "max-layer-height=f@";
+    def->min = 0;
+    {
+        ConfigOptionFloats* opt = new ConfigOptionFloats();
+        opt->values.push_back(0);
+        def->default_value = opt;
+    }
+
     def = this->add("max_print_speed", coFloat);
     def->label = "Max print speed";
     def->tooltip = "When setting other speed settings to 0 Slic3r will autocalculate the optimal speed in order to keep constant extruder pressure. This experimental setting is used to set the highest print speed you want to allow.";
@@ -660,6 +757,18 @@ PrintConfigDef::PrintConfigDef()
     def->min = 0;
     def->max = 100;
     def->default_value = new ConfigOptionInt(35);
+
+    def = this->add("min_layer_height", coFloats);
+    def->label = "Min";
+    def->tooltip = "This is the lowest printable layer height for this extruder and limits the resolution for variable layer height. Typical values are between 0.05 mm and 0.1 mm.";
+    def->sidetext = "mm";
+    def->cli = "min-layer-height=f@";
+    def->min = 0;
+    {
+        ConfigOptionFloats* opt = new ConfigOptionFloats();
+        opt->values.push_back(0.07);
+        def->default_value = opt;
+    }
 
     def = this->add("min_print_speed", coFloat);
     def->label = "Min print speed";
@@ -789,18 +898,20 @@ PrintConfigDef::PrintConfigDef()
     def->full_width = true;
     def->height = 60;
 
+    def = this->add("printer_notes", coString);
+    def->label = "Printer notes";
+    def->tooltip = "You can put your notes regarding the printer here.";
+    def->cli = "printer-notes=s";
+    def->multiline = true;
+    def->full_width = true;
+    def->height = 130;
+    def->default_value = new ConfigOptionString("");
+
     def = this->add("print_settings_id", coString);
     def->default_value = new ConfigOptionString("");
     
     def = this->add("printer_settings_id", coString);
     def->default_value = new ConfigOptionString("");
-
-    def = this->add("pressure_advance", coFloat);
-    def->label = "Pressure advance";
-    def->tooltip = "When set to a non-zero value, this experimental option enables pressure regulation. It's the K constant for the advance algorithm that pushes more or less filament upon speed changes. It's useful for Bowden-tube extruders. Reasonable values are in range 0-10.";
-    def->cli = "pressure-advance=f";
-    def->min = 0;
-    def->default_value = new ConfigOptionFloat(0);
 
     def = this->add("raft_layers", coInt);
     def->label = "Raft layers";
@@ -827,6 +938,17 @@ PrintConfigDef::PrintConfigDef()
     {
         ConfigOptionFloats* opt = new ConfigOptionFloats();
         opt->values.push_back(2);
+        def->default_value = opt;
+    }
+
+    def = this->add("retract_before_wipe", coPercents);
+    def->label = "Retract amount before wipe";
+    def->tooltip = "With bowden extruders, it may be wise to do some amount of quick retract before doing the wipe movement.";
+    def->sidetext = "%";
+    def->cli = "retract-before-wipe=s@";
+    {
+        ConfigOptionPercents* opt = new ConfigOptionPercents();
+        opt->values.push_back(0.f);
         def->default_value = opt;
     }
     
@@ -922,7 +1044,7 @@ PrintConfigDef::PrintConfigDef()
     }
 
     def = this->add("retract_speed", coFloats);
-    def->label = "Speed";
+    def->label = "Retraction Speed";
     def->full_label = "Retraction Speed";
     def->tooltip = "The speed for retractions (it only applies to the extruder motor).";
     def->sidetext = "mm/s";
@@ -930,6 +1052,18 @@ PrintConfigDef::PrintConfigDef()
     {
         ConfigOptionFloats* opt = new ConfigOptionFloats();
         opt->values.push_back(40);
+        def->default_value = opt;
+    }
+
+    def = this->add("deretract_speed", coFloats);
+    def->label = "Deretraction Speed";
+    def->full_label = "Deretraction Speed";
+    def->tooltip = "The speed for loading of a filament into extruder after retraction (it only applies to the extruder motor). If left to zero, the retraction speed is used.";
+    def->sidetext = "mm/s";
+    def->cli = "retract-speed=f@";
+    {
+        ConfigOptionFloats* opt = new ConfigOptionFloats();
+        opt->values.push_back(0);
         def->default_value = opt;
     }
 
@@ -942,11 +1076,11 @@ PrintConfigDef::PrintConfigDef()
     def->enum_values.push_back("random");
     def->enum_values.push_back("nearest");
     def->enum_values.push_back("aligned");
-//    def->enum_values.push_back("preferred");
+    def->enum_values.push_back("rear");
     def->enum_labels.push_back("Random");
     def->enum_labels.push_back("Nearest");
     def->enum_labels.push_back("Aligned");
-//    def->enum_labels.push_back("Preferred Direction");
+    def->enum_labels.push_back("Rear"); 
     def->default_value = new ConfigOptionEnum<SeamPosition>(spAligned);
 
 #if 0
@@ -1114,12 +1248,42 @@ PrintConfigDef::PrintConfigDef()
     def->height = 120;
     def->default_value = new ConfigOptionString("G28 ; home all axes\nG1 Z5 F5000 ; lift nozzle\n");
 
+    def = this->add("start_filament_gcode", coStrings);
+    def->label = "Start G-code";
+    def->tooltip = "This start procedure is inserted at the beginning, after any printer start gcode. This is used to override settings for a specific filament. If Slic3r detects M104, M109, M140 or M190 in your custom codes, such commands will not be prepended automatically so you're free to customize the order of heating commands and other custom actions. Note that you can use placeholder variables for all Slic3r settings, so you can put a \"M109 S[first_layer_temperature]\" command wherever you want. If you have multiple extruders, the gcode is processed in extruder order.";
+    def->cli = "start-filament-gcode=s@";
+    def->multiline = true;
+    def->full_width = true;
+    def->height = 120;
+    {
+        ConfigOptionStrings* opt = new ConfigOptionStrings();
+        opt->values.push_back("; Filament gcode\n");
+        def->default_value = opt;
+    }
+
+    def = this->add("single_extruder_multi_material", coBool);
+    def->label = "Single Extruder Multi Material";
+    def->tooltip = "The printer multiplexes filaments into a single hot end.";
+    def->cli = "single-extruder-multi-material!";
+    def->default_value = new ConfigOptionBool(false);
+
     def = this->add("support_material", coBool);
     def->label = "Generate support material";
     def->category = "Support material";
     def->tooltip = "Enable support material generation.";
     def->cli = "support-material!";
     def->default_value = new ConfigOptionBool(false);
+
+    def = this->add("support_material_xy_spacing", coFloatOrPercent);
+    def->label = "XY separation between an object and its support";
+    def->category = "Support material";
+    def->tooltip = "XY separation between an object and its support. If expressed as percentage (for example 50%), it will be calculated over external perimeter width.";
+    def->sidetext = "mm or %";
+    def->cli = "support-material-xy-spacing=s";
+    def->ratio_over = "external_perimeter_extrusion_width";
+    def->min = 0;
+    // Default is half the external perimeter width.
+    def->default_value = new ConfigOptionFloatOrPercent(50, true);
 
     def = this->add("support_material_angle", coInt);
     def->label = "Pattern angle";
@@ -1165,9 +1329,9 @@ PrintConfigDef::PrintConfigDef()
     def = this->add("support_material_extruder", coInt);
     def->label = "Support material/raft/skirt extruder";
     def->category = "Extruders";
-    def->tooltip = "The extruder to use when printing support material, raft and skirt.";
+    def->tooltip = "The extruder to use when printing support material, raft and skirt (1+, 0 to use the current extruder to minimize tool changes).";
     def->cli = "support-material-extruder=i";
-    def->min = 1;
+    def->min = 0;
     def->default_value = new ConfigOptionInt(1);
 
     def = this->add("support_material_extrusion_width", coFloatOrPercent);
@@ -1178,12 +1342,19 @@ PrintConfigDef::PrintConfigDef()
     def->cli = "support-material-extrusion-width=s";
     def->default_value = new ConfigOptionFloatOrPercent(0, false);
 
+    def = this->add("support_material_interface_contact_loops", coBool);
+    def->label = "Interface loops";
+    def->category = "Support material";
+    def->tooltip = "Cover the top contact layer of the supports with loops. Disabled by default.";
+    def->cli = "support-material-interface-contact-loops!";
+    def->default_value = new ConfigOptionBool(false);
+
     def = this->add("support_material_interface_extruder", coInt);
     def->label = "Support material/raft interface extruder";
     def->category = "Extruders";
-    def->tooltip = "The extruder to use when printing support material interface. This affects raft too.";
+    def->tooltip = "The extruder to use when printing support material interface (1+, 0 to use the current extruder to minimize tool changes). This affects raft too.";
     def->cli = "support-material-interface-extruder=i";
-    def->min = 1;
+    def->min = 0;
     def->default_value = new ConfigOptionInt(1);
 
     def = this->add("support_material_interface_layers", coInt);
@@ -1247,6 +1418,13 @@ PrintConfigDef::PrintConfigDef()
     def->cli = "support-material-speed=f";
     def->min = 0;
     def->default_value = new ConfigOptionFloat(60);
+
+    def = this->add("support_material_synchronize_layers", coBool);
+    def->label = "Synchronize with object layers";
+    def->category = "Support material";
+    def->tooltip = "Synchronize support layers with the object print layers. This is useful with multi-material printers, where the extruder switch is expensive.";
+    def->cli = "support-material-synchronize-layers!";
+    def->default_value = new ConfigOptionBool(false);
 
     def = this->add("support_material_threshold", coInt);
     def->label = "Overhang threshold";
@@ -1359,6 +1537,18 @@ PrintConfigDef::PrintConfigDef()
     def->cli = "use-volumetric-e!";
     def->default_value = new ConfigOptionBool(false);
 
+    def = this->add("set_and_wait_temperatures", coBool);
+    def->label = "Use Set and Wait for changing bed temperatures";
+    def->tooltip = "Check this to change gcode for temperature changes from not waiting (usually M140) to waiting (usually M190). Only necessary if you have a slow-to-heat bed and the first layer bed temp is lower than the other layers.";
+    def->cli = "set-and-wait-temperatures!";
+    def->default_value = new ConfigOptionBool(false);
+
+    def = this->add("variable_layer_height", coBool);
+    def->label = "Enable variable layer height feature";
+    def->tooltip = "Some printers or printer setups may have difficulties printing with a variable layer height. Enabled by default.";
+    def->cli = "variable-layer-height!";
+    def->default_value = new ConfigOptionBool(true);
+
     def = this->add("wipe", coBools);
     def->label = "Wipe while retracting";
     def->tooltip = "This flag will move the nozzle while retracting to minimize the possible blob on leaky extruders.";
@@ -1368,6 +1558,40 @@ PrintConfigDef::PrintConfigDef()
         opt->values.push_back(false);
         def->default_value = opt;
     }
+
+    def = this->add("wipe_tower", coBool);
+    def->label = "Enable";
+    def->tooltip = "Multi material printers may need to prime or purge extruders on tool changes. Extrude the excess material into the wipe tower.";
+    def->cli = "wipe-tower!";
+    def->default_value = new ConfigOptionBool(false);
+
+    def = this->add("wipe_tower_x", coFloat);
+    def->label = "Position X";
+    def->tooltip = "X coordinate of the left front corner of a wipe tower";
+    def->sidetext = "mm";
+    def->cli = "wipe-tower-x=f";
+    def->default_value = new ConfigOptionFloat(180.);
+
+    def = this->add("wipe_tower_y", coFloat);
+    def->label = "Position Y";
+    def->tooltip = "Y coordinate of the left front corner of a wipe tower";
+    def->sidetext = "mm";
+    def->cli = "wipe-tower-y=f";
+    def->default_value = new ConfigOptionFloat(140.);
+
+    def = this->add("wipe_tower_width", coFloat);
+    def->label = "Width";
+    def->tooltip = "Width of a wipe tower";
+    def->sidetext = "mm";
+    def->cli = "wipe-tower-width=f";
+    def->default_value = new ConfigOptionFloat(60.);
+
+    def = this->add("wipe_tower_per_color_wipe", coFloat);
+    def->label = "Per color change depth";
+    def->tooltip = "Depth of a wipe color per color change. For N colors, there will be maximum (N-1) tool switches performed, therefore the total depth of the wipe tower will be (N-1) times this value.";
+    def->sidetext = "mm";
+    def->cli = "wipe-tower-per-color-wipe=f";
+    def->default_value = new ConfigOptionFloat(15.);
 
     def = this->add("xy_size_compensation", coFloat);
     def->label = "XY Size Compensation";

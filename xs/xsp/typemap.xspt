@@ -78,6 +78,9 @@
 %typemap{ExtrusionEntityCollection*};
 %typemap{Ref<ExtrusionEntityCollection>}{simple};
 %typemap{Clone<ExtrusionEntityCollection>}{simple};
+%typemap{ExtrusionMultiPath*};
+%typemap{Ref<ExtrusionMultiPath>}{simple};
+%typemap{Clone<ExtrusionMultiPath>}{simple};
 %typemap{ExtrusionPath*};
 %typemap{Ref<ExtrusionPath>}{simple};
 %typemap{Clone<ExtrusionPath>}{simple};
@@ -102,9 +105,6 @@
 %typemap{GCodeSender*};
 %typemap{Ref<GCodeSender>}{simple};
 %typemap{Clone<GCodeSender>}{simple};
-%typemap{GCodePressureEqualizer*};
-%typemap{Ref<GCodePressureEqualizer>}{simple};
-%typemap{Clone<GCodePressureEqualizer>}{simple};
 %typemap{BridgeDetector*};
 %typemap{Ref<BridgeDetector>}{simple};
 %typemap{Clone<BridgeDetector>}{simple};
@@ -149,17 +149,9 @@
 %typemap{Ref<PlaceholderParser>}{simple};
 %typemap{Clone<PlaceholderParser>}{simple};
 
-%typemap{AvoidCrossingPerimeters*};
-%typemap{Ref<AvoidCrossingPerimeters>}{simple};
-%typemap{Clone<AvoidCrossingPerimeters>}{simple};
-
-%typemap{Wipe*};
-%typemap{Ref<Wipe>}{simple};
-%typemap{Clone<Wipe>}{simple};
-
-%typemap{OozePrevention*};
-%typemap{Ref<OozePrevention>}{simple};
-%typemap{Clone<OozePrevention>}{simple};
+%typemap{CoolingBuffer*};
+%typemap{Ref<CoolingBuffer>}{simple};
+%typemap{Clone<CoolingBuffer>}{simple};
 
 %typemap{GCode*};
 %typemap{Ref<GCode>}{simple};
@@ -204,7 +196,12 @@
 %typemap{ModelInstancePtrs*};
 %typemap{Ref<ModelInstancePtrs>}{simple};
 %typemap{Clone<ModelInstancePtrs>}{simple};
-%typemap{GLVertexArray*};
+%typemap{GLShader*};
+%typemap{Ref<GLShader>}{simple};
+%typemap{GLVolume*};
+%typemap{Ref<GLVolume>}{simple};
+%typemap{GLVolumeCollection*};
+%typemap{Ref<GLVolumeCollection>}{simple};
 
 %typemap{PrintRegionPtrs*};
 %typemap{PrintObjectPtrs*};

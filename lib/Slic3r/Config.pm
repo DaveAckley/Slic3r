@@ -12,7 +12,7 @@ use List::Util qw(first max);
 our @Ignore = qw(duplicate_x duplicate_y multiply_x multiply_y support_material_tool acceleration
     adjust_overhang_flow standby_temperature scale rotate duplicate duplicate_grid
     rotate scale duplicate_grid start_perimeters_at_concave_points start_perimeters_at_non_overhang
-    randomize_start seal_position bed_size print_center g0 vibration_limit);
+    randomize_start seal_position bed_size print_center g0 vibration_limit gcode_arcs pressure_advance);
 
 # C++ Slic3r::PrintConfigDef exported as a Perl hash of hashes.
 # The C++ counterpart is a constant singleton.
@@ -254,8 +254,11 @@ sub validate {
     die "Invalid value for --gcode-flavor\n"
         if !first { $_ eq $self->gcode_flavor } @{$Options->{gcode_flavor}{values}};
     
-    die "--use-firmware-retraction is only supported by Marlin firmware\n"
-        if $self->use_firmware_retraction && $self->gcode_flavor ne 'reprap' && $self->gcode_flavor ne 'machinekit';
+    die "--use-firmware-retraction is only supported by Marlin, Smoothie, Repetier and Machinekit firmware\n"
+        if $self->use_firmware_retraction && $self->gcode_flavor ne 'smoothie' 
+        && $self->gcode_flavor ne 'reprap' 
+        && $self->gcode_flavor ne 'machinekit' 
+        && $self->gcode_flavor ne 'repetier';
     
     die "--use-firmware-retraction is not compatible with --wipe\n"
         if $self->use_firmware_retraction && first {$_} @{$self->wipe};
@@ -325,7 +328,7 @@ sub validate {
         my $max_nozzle_diameter = max(@{ $self->nozzle_diameter });
         die "Invalid extrusion width (too large)\n"
             if defined first { $_ > 10 * $max_nozzle_diameter }
-                map $self->get_abs_value_over("${_}_extrusion_width", $self->layer_height),
+                map $self->get_abs_value_over("${_}_extrusion_width", $max_nozzle_diameter),
                 qw(perimeter infill solid_infill top_infill support_material first_layer);
     }
     

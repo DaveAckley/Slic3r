@@ -132,9 +132,9 @@ sub _init_tabpanel {
         $tab = $self->{options_tabs}{$tab_name} = ($class_prefix . ucfirst $tab_name)->new(
             $panel, 
             no_controller => $self->{no_controller});
+        # Callback to be executed after any of the configuration fields (Perl class Slic3r::GUI::OptionsGroup::Field) change their value.
         $tab->on_value_change(sub {
             my ($opt_key, $value) = @_;
-            
             my $config = $tab->config;
             if ($self->{plater}) {
                 $self->{plater}->on_config_change($config); # propagate config change events to the plater
@@ -158,6 +158,7 @@ sub _init_tabpanel {
         # a preset changes at Slic3r::GUI::Tab.
         $tab->on_presets_changed(sub {
             if ($self->{plater}) {
+                # Update preset combo boxes (Print settings, Filament, Printer) from their respective tabs.
                 $self->{plater}->update_presets($tab_name, @_);
                 $self->{plater}->on_config_change($tab->config);
                 if ($self->{controller}) {
@@ -275,13 +276,16 @@ sub _init_menubar {
             $self->_append_menu_item($windowMenu, "Select &Plater Tab\tCtrl+1", 'Show the plater', sub {
                 $self->select_tab(0);
             }, undef, 'application_view_tile.png');
-            if (!$self->{no_controller}) {
-                $self->_append_menu_item($windowMenu, "Select &Controller Tab\tCtrl+T", 'Show the printer controller', sub {
-                    $self->select_tab(1);
-                }, undef, 'printer_empty.png');
-            }
+            $tab_offset += 1;
+        }
+        if (!$self->{no_controller}) {
+            $self->_append_menu_item($windowMenu, "Select &Controller Tab\tCtrl+T", 'Show the printer controller', sub {
+                $self->select_tab(1);
+            }, undef, 'printer_empty.png');
+            $tab_offset += 1;
+        }
+        if ($tab_offset > 0) {
             $windowMenu->AppendSeparator();
-            $tab_offset += 2;
         }
         $self->_append_menu_item($windowMenu, "Select P&rint Settings Tab\tCtrl+2", 'Show the print settings', sub {
             $self->select_tab($tab_offset+0);
@@ -330,6 +334,12 @@ sub _init_menubar {
             Wx::LaunchDefaultBrowser('http://manual.slic3r.org/');
         });
         $helpMenu->AppendSeparator();
+        $self->_append_menu_item($helpMenu, "System Info", 'Show system information', sub {
+            wxTheApp->system_info;
+        });
+        $self->_append_menu_item($helpMenu, "Report an Issue", 'Report an issue on the Slic3r Prusa Edition', sub {
+            Wx::LaunchDefaultBrowser('http://github.com/prusa3d/slic3r/issues/new');
+        });
         $self->_append_menu_item($helpMenu, "&About Slic3r", 'Show about dialog', sub {
             wxTheApp->about;
         });
@@ -377,7 +387,7 @@ sub quick_slice {
         my $input_file;
         my $dir = $Slic3r::GUI::Settings->{recent}{skein_directory} || $Slic3r::GUI::Settings->{recent}{config_directory} || '';
         if (!$params{reslice}) {
-            my $dialog = Wx::FileDialog->new($self, 'Choose a file to slice (STL/OBJ/AMF):', $dir, "", &Slic3r::GUI::MODEL_WILDCARD, wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+            my $dialog = Wx::FileDialog->new($self, 'Choose a file to slice (STL/OBJ/AMF/PRUSA):', $dir, "", &Slic3r::GUI::MODEL_WILDCARD, wxFD_OPEN | wxFD_FILE_MUST_EXIST);
             if ($dialog->ShowModal != wxID_OK) {
                 $dialog->Destroy;
                 return;
@@ -433,7 +443,7 @@ sub quick_slice {
         if ($params{reslice}) {
             $output_file = $qs_last_output_file if defined $qs_last_output_file;
         } elsif ($params{save_as}) {
-            $output_file = $sprint->expanded_output_filepath;
+            $output_file = $sprint->output_filepath;
             $output_file =~ s/\.gcode$/.svg/i if $params{export_svg};
             my $dlg = Wx::FileDialog->new($self, 'Save ' . ($params{export_svg} ? 'SVG' : 'G-code') . ' file as:',
                 wxTheApp->output_path(dirname($output_file)),

@@ -9,14 +9,7 @@
 
 #include <Shiny/Shiny.h>
 
-// Factor to convert from coord_t (which is int32) to an int64 type used by the Clipper library
-// for general offsetting (the offset(), offset2(), offset_ex() functions) and for the safety offset,
-// which is optionally executed by other functions (union, intersection, diff).
-// By the way, is the scalling for offset needed at all?
-#define CLIPPER_OFFSET_POWER_OF_2 17
-// 2^17=131072
-#define CLIPPER_OFFSET_SCALE (1 << CLIPPER_OFFSET_POWER_OF_2)
-#define CLIPPER_OFFSET_SCALE_ROUNDING_DELTA ((1 << (CLIPPER_OFFSET_POWER_OF_2 - 1)) - 1)
+#define CLIPPER_OFFSET_SHORTEST_EDGE_FACTOR (0.005f)
 
 namespace Slic3r {
 
@@ -219,9 +212,11 @@ ClipperLib::Paths _offset(ClipperLib::Paths &&input, ClipperLib::EndType endType
         co.ArcTolerance = miterLimit;
     else
         co.MiterLimit = miterLimit;
+    float delta_scaled = delta * float(CLIPPER_OFFSET_SCALE);
+    co.ShortestEdgeLength = double(std::abs(delta_scaled * CLIPPER_OFFSET_SHORTEST_EDGE_FACTOR));
     co.AddPaths(input, joinType, endType);
     ClipperLib::Paths retval;
-    co.Execute(retval, delta * float(CLIPPER_OFFSET_SCALE));
+    co.Execute(retval, delta_scaled);
     
     // unscale output
     unscaleClipperPolygons(retval);
@@ -253,6 +248,7 @@ ClipperLib::Paths _offset(const Slic3r::ExPolygon &expolygon, const float delta,
             co.ArcTolerance = miterLimit * double(CLIPPER_OFFSET_SCALE);
         else
             co.MiterLimit = miterLimit;
+        co.ShortestEdgeLength = double(std::abs(delta_scaled * CLIPPER_OFFSET_SHORTEST_EDGE_FACTOR));
         co.AddPath(input, joinType, ClipperLib::etClosedPolygon);
         co.Execute(contours, delta_scaled);
     }
@@ -269,6 +265,7 @@ ClipperLib::Paths _offset(const Slic3r::ExPolygon &expolygon, const float delta,
                 co.ArcTolerance = miterLimit * double(CLIPPER_OFFSET_SCALE);
             else
                 co.MiterLimit = miterLimit;
+            co.ShortestEdgeLength = double(std::abs(delta_scaled * CLIPPER_OFFSET_SHORTEST_EDGE_FACTOR));
             co.AddPath(input, joinType, ClipperLib::etClosedPolygon);
             ClipperLib::Paths out;
             co.Execute(out, - delta_scaled);
@@ -278,7 +275,9 @@ ClipperLib::Paths _offset(const Slic3r::ExPolygon &expolygon, const float delta,
 
     // 3) Subtract holes from the contours.
     ClipperLib::Paths output;
-    {
+    if (holes.empty()) {
+        output = std::move(contours);
+    } else {
         ClipperLib::Clipper clipper;
         clipper.Clear();
         clipper.AddPaths(contours, ClipperLib::ptSubject, true);
@@ -291,26 +290,22 @@ ClipperLib::Paths _offset(const Slic3r::ExPolygon &expolygon, const float delta,
     return output;
 }
 
-// This is a safe variant of the polygon offset, tailored for a single ExPolygon:
-// a single polygon with multiple non-overlapping holes.
-// Each contour and hole is offsetted separately, then the holes are subtracted from the outer contours.
+// This is a safe variant of the polygons offset, tailored for multiple ExPolygons.
+// It is required, that the input expolygons do not overlap and that the holes of each ExPolygon don't intersect with their respective outer contours.
+// Each ExPolygon is offsetted separately, then the offsetted ExPolygons are united.
 ClipperLib::Paths _offset(const Slic3r::ExPolygons &expolygons, const float delta,
     ClipperLib::JoinType joinType, double miterLimit)
 {
-//    printf("new ExPolygon offset\n");
     const float delta_scaled = delta * float(CLIPPER_OFFSET_SCALE);
-    ClipperLib::Paths contours;
-    ClipperLib::Paths holes;
-    contours.reserve(expolygons.size());
-    {
-        size_t n_holes = 0;
-        for (size_t i = 0; i < expolygons.size(); ++ i)
-            n_holes += expolygons[i].holes.size();
-        holes.reserve(n_holes);
-    }
-
+    // Offsetted ExPolygons before they are united.
+    ClipperLib::Paths contours_cummulative;
+    contours_cummulative.reserve(expolygons.size());
+    // How many non-empty offsetted expolygons were actually collected into contours_cummulative?
+    // If only one, then there is no need to do a final union.
+    size_t expolygons_collected = 0;
     for (Slic3r::ExPolygons::const_iterator it_expoly = expolygons.begin(); it_expoly != expolygons.end(); ++ it_expoly) {
         // 1) Offset the outer contour.
+        ClipperLib::Paths contours;
         {
             ClipperLib::Path input = Slic3rMultiPoint_to_ClipperPath(it_expoly->contour);
             scaleClipperPolygon(input);
@@ -319,38 +314,84 @@ ClipperLib::Paths _offset(const Slic3r::ExPolygons &expolygons, const float delt
                 co.ArcTolerance = miterLimit * double(CLIPPER_OFFSET_SCALE);
             else
                 co.MiterLimit = miterLimit;
+            co.ShortestEdgeLength = double(std::abs(delta_scaled * CLIPPER_OFFSET_SHORTEST_EDGE_FACTOR));
             co.AddPath(input, joinType, ClipperLib::etClosedPolygon);
-            ClipperLib::Paths out;
-            co.Execute(out, delta_scaled);
-            contours.insert(contours.end(), out.begin(), out.end());
+            co.Execute(contours, delta_scaled);
         }
+        if (contours.empty())
+            // No need to try to offset the holes.
+            continue;
 
-        // 2) Offset the holes one by one, collect the results.
-        {
-            for (Polygons::const_iterator it_hole = it_expoly->holes.begin(); it_hole != it_expoly->holes.end(); ++ it_hole) {
-                ClipperLib::Path input = Slic3rMultiPoint_to_ClipperPath_reversed(*it_hole);
-                scaleClipperPolygon(input);
-                ClipperLib::ClipperOffset co;
-                if (joinType == jtRound)
-                    co.ArcTolerance = miterLimit * double(CLIPPER_OFFSET_SCALE);
-                else
-                    co.MiterLimit = miterLimit;
-                co.AddPath(input, joinType, ClipperLib::etClosedPolygon);
-                ClipperLib::Paths out;
-                co.Execute(out, - delta_scaled);
-                holes.insert(holes.end(), out.begin(), out.end());
+        if (it_expoly->holes.empty()) {
+            // No need to subtract holes from the offsetted expolygon, we are done.
+            contours_cummulative.insert(contours_cummulative.end(), contours.begin(), contours.end());
+            ++ expolygons_collected;
+        } else {
+            // 2) Offset the holes one by one, collect the offsetted holes.
+            ClipperLib::Paths holes;
+            {
+                for (Polygons::const_iterator it_hole = it_expoly->holes.begin(); it_hole != it_expoly->holes.end(); ++ it_hole) {
+                    ClipperLib::Path input = Slic3rMultiPoint_to_ClipperPath_reversed(*it_hole);
+                    scaleClipperPolygon(input);
+                    ClipperLib::ClipperOffset co;
+                    if (joinType == jtRound)
+                        co.ArcTolerance = miterLimit * double(CLIPPER_OFFSET_SCALE);
+                    else
+                        co.MiterLimit = miterLimit;
+                    co.ShortestEdgeLength = double(std::abs(delta_scaled * CLIPPER_OFFSET_SHORTEST_EDGE_FACTOR));
+                    co.AddPath(input, joinType, ClipperLib::etClosedPolygon);
+                    ClipperLib::Paths out;
+                    co.Execute(out, - delta_scaled);
+                    holes.insert(holes.end(), out.begin(), out.end());
+                }
+            }
+
+            // 3) Subtract holes from the contours.
+            if (holes.empty()) {
+                // No hole remaining after an offset. Just copy the outer contour.
+                contours_cummulative.insert(contours_cummulative.end(), contours.begin(), contours.end());
+                ++ expolygons_collected;
+            } else if (delta < 0) {
+                // Negative offset. There is a chance, that the offsetted hole intersects the outer contour. 
+                // Subtract the offsetted holes from the offsetted contours.
+                ClipperLib::Clipper clipper;
+                clipper.Clear();
+                clipper.AddPaths(contours, ClipperLib::ptSubject, true);
+                clipper.AddPaths(holes, ClipperLib::ptClip, true);
+                ClipperLib::Paths output;
+                clipper.Execute(ClipperLib::ctDifference, output, ClipperLib::pftNonZero, ClipperLib::pftNonZero);
+                if (! output.empty()) {
+                    contours_cummulative.insert(contours_cummulative.end(), output.begin(), output.end());
+                    ++ expolygons_collected;
+                } else {
+                    // The offsetted holes have eaten up the offsetted outer contour.
+                }
+            } else {
+                // Positive offset. As long as the Clipper offset does what one expects it to do, the offsetted hole will have a smaller
+                // area than the original hole or even disappear, therefore there will be no new intersections.
+                // Just collect the reversed holes.
+                contours_cummulative.reserve(contours.size() + holes.size());
+                contours_cummulative.insert(contours_cummulative.end(), contours.begin(), contours.end());
+                // Reverse the holes in place.
+                for (size_t i = 0; i < holes.size(); ++ i)
+                    std::reverse(holes[i].begin(), holes[i].end());
+                contours_cummulative.insert(contours_cummulative.end(), holes.begin(), holes.end());
+                ++ expolygons_collected;
             }
         }
     }
 
-    // 3) Subtract holes from the contours.
+    // 4) Unite the offsetted expolygons.
     ClipperLib::Paths output;
-    {
+    if (expolygons_collected > 1 && delta > 0) {
+        // There is a chance that the outwards offsetted expolygons may intersect. Perform a union.
         ClipperLib::Clipper clipper;
-        clipper.Clear();
-        clipper.AddPaths(contours, ClipperLib::ptSubject, true);
-        clipper.AddPaths(holes, ClipperLib::ptClip, true);
-        clipper.Execute(ClipperLib::ctDifference, output, ClipperLib::pftNonZero, ClipperLib::pftNonZero);
+        clipper.Clear(); 
+        clipper.AddPaths(contours_cummulative, ClipperLib::ptSubject, true);
+        clipper.Execute(ClipperLib::ctUnion, output, ClipperLib::pftNonZero, ClipperLib::pftNonZero);
+    } else {
+        // Negative offset. The shrunk expolygons shall not mutually intersect. Just copy the output.
+        output = std::move(contours_cummulative);
     }
     
     // 4) Unscale the output.
@@ -375,17 +416,20 @@ _offset2(const Polygons &polygons, const float delta1, const float delta2,
     } else {
         co.MiterLimit = miterLimit;
     }
+    float delta_scaled1 = delta1 * float(CLIPPER_OFFSET_SCALE);
+    float delta_scaled2 = delta2 * float(CLIPPER_OFFSET_SCALE);
+    co.ShortestEdgeLength = double(std::max(std::abs(delta_scaled1), std::abs(delta_scaled2)) * CLIPPER_OFFSET_SHORTEST_EDGE_FACTOR);
     
     // perform first offset
     ClipperLib::Paths output1;
     co.AddPaths(input, joinType, ClipperLib::etClosedPolygon);
-    co.Execute(output1, delta1 * float(CLIPPER_OFFSET_SCALE));
+    co.Execute(output1, delta_scaled1);
     
     // perform second offset
     co.Clear();
     co.AddPaths(output1, joinType, ClipperLib::etClosedPolygon);
     ClipperLib::Paths retval;
-    co.Execute(retval, delta2 * float(CLIPPER_OFFSET_SCALE));
+    co.Execute(retval, delta_scaled2);
     
     // unscale output
     unscaleClipperPolygons(retval);
@@ -446,6 +490,44 @@ _clipper_do(const ClipperLib::ClipType clipType, const Polygons &subject,
     return retval;
 }
 
+// Fix of #117: A large fractal pyramid takes ages to slice
+// The Clipper library has difficulties processing overlapping polygons.
+// Namely, the function Clipper::JoinCommonEdges() has potentially a terrible time complexity if the output
+// of the operation is of the PolyTree type.
+// This function implmenets a following workaround:
+// 1) Peform the Clipper operation with the output to Paths. This method handles overlaps in a reasonable time.
+// 2) Run Clipper Union once again to extract the PolyTree from the result of 1).
+inline ClipperLib::PolyTree _clipper_do_polytree2(const ClipperLib::ClipType clipType, const Polygons &subject, 
+    const Polygons &clip, const ClipperLib::PolyFillType fillType, const bool safety_offset_)
+{
+    // read input
+    ClipperLib::Paths input_subject = Slic3rMultiPoints_to_ClipperPaths(subject);
+    ClipperLib::Paths input_clip    = Slic3rMultiPoints_to_ClipperPaths(clip);
+    
+    // perform safety offset
+    if (safety_offset_) {
+        if (clipType == ClipperLib::ctUnion) {
+            safety_offset(&input_subject);
+        } else {
+            safety_offset(&input_clip);
+        }
+    }
+    
+    ClipperLib::Clipper clipper;
+    clipper.AddPaths(input_subject, ClipperLib::ptSubject, true);
+    clipper.AddPaths(input_clip,    ClipperLib::ptClip,    true);
+    // Perform the operation with the output to input_subject.
+    // This pass does not generate a PolyTree, which is a very expensive operation with the current Clipper library
+    // if there are overapping edges.
+    clipper.Execute(clipType, input_subject, fillType, fillType);
+    // Perform an additional Union operation to generate the PolyTree ordering.
+    clipper.Clear();
+    clipper.AddPaths(input_subject, ClipperLib::ptSubject, true);
+    ClipperLib::PolyTree retval;
+    clipper.Execute(ClipperLib::ctUnion, retval, fillType, fillType);
+    return retval;
+}
+
 ClipperLib::PolyTree
 _clipper_do_pl(const ClipperLib::ClipType clipType, const Polylines &subject, 
     const Polygons &clip, const ClipperLib::PolyFillType fillType,
@@ -483,7 +565,7 @@ ExPolygons
 _clipper_ex(ClipperLib::ClipType clipType, const Polygons &subject, 
     const Polygons &clip, bool safety_offset_)
 {
-    ClipperLib::PolyTree polytree = _clipper_do<ClipperLib::PolyTree>(clipType, subject, clip, ClipperLib::pftNonZero, safety_offset_);
+    ClipperLib::PolyTree polytree = _clipper_do_polytree2(clipType, subject, clip, ClipperLib::pftNonZero, safety_offset_);
     return PolyTreeToExPolygons(polytree);
 }
 

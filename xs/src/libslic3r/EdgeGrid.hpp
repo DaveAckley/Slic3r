@@ -58,7 +58,7 @@ public:
 	const size_t		cols() const { return m_cols; }
 
 	// For supports: Contours enclosing the rasterized edges.
-	Polygons 			contours_simplified() const;
+	Polygons 			contours_simplified(coord_t offset) const;
 
 protected:
 	struct Cell {
@@ -107,7 +107,7 @@ protected:
 	std::vector<float>							m_signed_distance_field;
 };
 
-#ifdef SLIC3R_GUI
+#if 0
 // Debugging utility. Save the signed distance field.
 extern void save_png(const Grid &grid, const BoundingBox &bbox, coord_t resolution, const char *path);
 #endif /* SLIC3R_GUI */

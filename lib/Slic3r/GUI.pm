@@ -14,7 +14,6 @@ use Slic3r::GUI::ConfigWizard;
 use Slic3r::GUI::Controller;
 use Slic3r::GUI::Controller::ManualControlDialog;
 use Slic3r::GUI::Controller::PrinterPanel;
-use Slic3r::GUI::GLShader;
 use Slic3r::GUI::MainFrame;
 use Slic3r::GUI::Notifier;
 use Slic3r::GUI::Plater;
@@ -25,6 +24,7 @@ use Slic3r::GUI::Plater::3DPreview;
 use Slic3r::GUI::Plater::ObjectPartsPanel;
 use Slic3r::GUI::Plater::ObjectCutDialog;
 use Slic3r::GUI::Plater::ObjectSettingsDialog;
+use Slic3r::GUI::Plater::LambdaObjectDialog;
 use Slic3r::GUI::Plater::OverrideSettingsPanel;
 use Slic3r::GUI::Preferences;
 use Slic3r::GUI::ProgressStatusBar;
@@ -32,6 +32,7 @@ use Slic3r::GUI::Projector;
 use Slic3r::GUI::OptionsGroup;
 use Slic3r::GUI::OptionsGroup::Field;
 use Slic3r::GUI::SimpleTab;
+use Slic3r::GUI::SystemInfo;
 use Slic3r::GUI::Tab;
 
 our $have_OpenGL = eval "use Slic3r::GUI::3DScene; 1";
@@ -43,15 +44,16 @@ use Wx::Event qw(EVT_IDLE EVT_COMMAND);
 use base 'Wx::App';
 
 use constant FILE_WILDCARDS => {
-    known   => 'Known files (*.stl, *.obj, *.amf, *.xml)|*.stl;*.STL;*.obj;*.OBJ;*.amf;*.AMF;*.xml;*.XML',
+    known   => 'Known files (*.stl, *.obj, *.amf, *.xml, *.prusa)|*.stl;*.STL;*.obj;*.OBJ;*.amf;*.AMF;*.xml;*.XML;*.prusa;*.PRUSA',
     stl     => 'STL files (*.stl)|*.stl;*.STL',
     obj     => 'OBJ files (*.obj)|*.obj;*.OBJ',
     amf     => 'AMF files (*.amf)|*.amf;*.AMF;*.xml;*.XML',
+    prusa   => 'Prusa Control files (*.prusa)|*.prusa;*.PRUSA',
     ini     => 'INI files *.ini|*.ini;*.INI',
     gcode   => 'G-code files (*.gcode, *.gco, *.g, *.ngc)|*.gcode;*.GCODE;*.gco;*.GCO;*.g;*.G;*.ngc;*.NGC',
     svg     => 'SVG files *.svg|*.svg;*.SVG',
 };
-use constant MODEL_WILDCARD => join '|', @{&FILE_WILDCARDS}{qw(known stl obj amf)};
+use constant MODEL_WILDCARD => join '|', @{&FILE_WILDCARDS}{qw(known stl obj amf prusa)};
 
 our $datadir;
 # If set, the "Controller" tab for the control of the printer over serial line and the serial port settings are hidden.
@@ -63,10 +65,12 @@ our @cb;
 
 our $Settings = {
     _ => {
-        mode => 'simple',
+        # Simple mode is very limited, rather start with the expert mode.
+        mode => 'expert',
         version_check => 1,
         autocenter => 1,
-        background_processing => 1,
+        # Disable background processing by default as it is not stable.
+        background_processing => 0,
         # If set, the "Controller" tab for the control of the printer over serial line and the serial port settings are hidden.
         # By default, Prusa has the controller hidden.
         no_controller => 1,
@@ -77,9 +81,9 @@ our $Settings = {
 
 our $have_button_icons = &Wx::wxVERSION_STRING =~ m" (?:2\.9\.[1-9]|3\.)";
 our $small_font = Wx::SystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
-$small_font->SetPointSize(11) if !&Wx::wxMSW;
+$small_font->SetPointSize(11) if &Wx::wxMAC;
 our $small_bold_font = Wx::SystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
-$small_bold_font->SetPointSize(11) if !&Wx::wxMSW;
+$small_bold_font->SetPointSize(11) if &Wx::wxMAC;
 $small_bold_font->SetWeight(wxFONTWEIGHT_BOLD);
 our $medium_font = Wx::SystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
 $medium_font->SetPointSize(12);
@@ -218,6 +222,31 @@ sub about {
     $about->Destroy;
 }
 
+sub system_info {
+    my ($self) = @_;
+
+    my $slic3r_info = Slic3r::slic3r_info(format => 'html');
+    my $copyright_info = Slic3r::copyright_info(format => 'html');
+    my $system_info = Slic3r::system_info(format => 'html');
+    my $opengl_info;
+    my $opengl_info_txt = '';
+    if (defined($self->{mainframe}) && defined($self->{mainframe}->{plater}) &&
+        defined($self->{mainframe}->{plater}->{canvas3D})) {
+        $opengl_info = $self->{mainframe}->{plater}->{canvas3D}->opengl_info(format => 'html');
+        $opengl_info_txt = $self->{mainframe}->{plater}->{canvas3D}->opengl_info;
+    }
+    my $about = Slic3r::GUI::SystemInfo->new(
+        parent      => undef, 
+        slic3r_info => $slic3r_info,
+#        copyright_info => $copyright_info,
+        system_info => $system_info, 
+        opengl_info => $opengl_info,
+        text_info => Slic3r::slic3r_info . Slic3r::system_info . $opengl_info_txt,
+    );
+    $about->ShowModal;
+    $about->Destroy;
+}
+
 # static method accepting a wxWindow object as first parameter
 sub catch_error {
     my ($self, $cb, $message_dialog) = @_;
@@ -321,7 +350,6 @@ sub check_version {
         my $response = $ua->get('http://slic3r.org/updatecheck');
         Wx::PostEvent($self, Wx::PlThreadEvent->new(-1, $VERSION_CHECK_EVENT,
             threads::shared::shared_clone([ $response->is_success, $response->decoded_content, $manual_check ])));
-        
         Slic3r::thread_cleanup();
     })->detach;
 }
@@ -341,7 +369,7 @@ sub open_model {
            || $Slic3r::GUI::Settings->{recent}{config_directory}
            || '';
     
-    my $dialog = Wx::FileDialog->new($window // $self->GetTopWindow, 'Choose one or more files (STL/OBJ/AMF):', $dir, "",
+    my $dialog = Wx::FileDialog->new($window // $self->GetTopWindow, 'Choose one or more files (STL/OBJ/AMF/PRUSA):', $dir, "",
         MODEL_WILDCARD, wxFD_OPEN | wxFD_MULTIPLE | wxFD_FILE_MUST_EXIST);
     if ($dialog->ShowModal != wxID_OK) {
         $dialog->Destroy;

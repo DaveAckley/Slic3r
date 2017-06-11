@@ -168,11 +168,7 @@ void make_fill(LayerRegion &layerm, ExtrusionEntityCollection &out)
             continue;
         
         // get filler object
-#if SLIC3R_CPPVER >= 11
         std::unique_ptr<Fill> f = std::unique_ptr<Fill>(Fill::new_from_type(fill_pattern));
-#else
-        std::auto_ptr<Fill> f = std::auto_ptr<Fill>(Fill::new_from_type(fill_pattern));
-#endif
         f->set_bounding_box(layerm.layer()->object()->bounding_box());
         
         // calculate the actual flow we'll be using for this infill
@@ -220,7 +216,7 @@ void make_fill(LayerRegion &layerm, ExtrusionEntityCollection &out)
 
         f->layer_id = layerm.layer()->id();
         f->z = layerm.layer()->print_z;
-        f->angle = Geometry::deg2rad(layerm.region()->config.fill_angle.value);
+        f->angle = float(Geometry::deg2rad(layerm.region()->config.fill_angle.value));
         // Maximum length of the perimeter segment linking two infill lines.
         f->link_max_length = scale_(link_max_length);
         // Used by the concentric infill pattern to clip the loops to create extrusion paths.

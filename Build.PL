@@ -28,7 +28,6 @@ my %prereqs = qw(
 );
 my %recommends = qw(
     Class::XSAccessor               0
-    XML::SAX::ExpatXS               0
     Test::Harness                   0
 );
 
@@ -44,7 +43,6 @@ if ($gui) {
     %recommends = qw(
     Growl::GNTP                     0.15
     Wx::GLCanvas                    0
-    OpenGL                          <0.70
     LWP::UserAgent                  0
     Net::Bonjour                    0
     );
@@ -111,11 +109,6 @@ EOF
     # make sure our cpanm is updated (old ones don't support the ~ syntax)
     system $cpanm, @cpanm_args, 'App::cpanminus';
     
-    # install the Windows-compatible Math::Libm
-    if ($^O eq 'MSWin32' && !eval "use Math::Libm; 1") {
-        system $cpanm, @cpanm_args, 'https://github.com/alexrj/Math-Libm/tarball/master';
-    }
-    
     my %modules = (%prereqs, %recommends);
     foreach my $module (sort keys %modules) {
         my $version = $modules{$module};
@@ -123,18 +116,10 @@ EOF
         
         # temporary workaround for upstream bug in test
         push @cmd, '--notest'
-            if $module =~ /^(?:OpenGL|Math::PlanePath|Test::Harness)$/;
+            if $module =~ /^(?:OpenGL|Test::Harness)$/;
         
         push @cmd, "$module~$version";
-        if ($module eq 'XML::SAX::ExpatXS' && $^O eq 'MSWin32') {
-            my $mingw = 'C:\dev\CitrusPerl\mingw64';
-            $mingw = 'C:\dev\CitrusPerl\mingw32' if !-d $mingw;
-            if (!-d $mingw) {
-                print "Could not find the MinGW directory at $mingw; skipping XML::SAX::ExpatXS (only needed for faster parsing of AMF files)\n";
-            } else {
-                push @cmd, sprintf('--configure-args="EXPATLIBPATH=%s\lib EXPATINCPATH=%s\include"', $mingw, $mingw);
-            }
-        }
+
         my $res = system @cmd;
         if ($res != 0) {
             if (exists $prereqs{$module}) {

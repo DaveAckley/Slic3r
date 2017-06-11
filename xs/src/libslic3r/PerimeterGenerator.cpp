@@ -297,30 +297,22 @@ PerimeterGenerator::process()
             // two or more loops
             inset += pspacing/2;
         }
-        
         // only apply infill overlap if we actually have one perimeter
         if (inset > 0)
             inset -= this->config->get_abs_value("infill_overlap", inset + ispacing/2);
-        
-        {
-            ExPolygons expp = union_ex(last);
-            
-            // simplify infill contours according to resolution
-            Polygons pp;
-            for (ExPolygons::const_iterator ex = expp.begin(); ex != expp.end(); ++ex)
-                ex->simplify_p(SCALED_RESOLUTION, &pp);
-            
-            // collapse too narrow infill areas
-            coord_t min_perimeter_infill_spacing = ispacing * (1 - INSET_OVERLAP_TOLERANCE);
-            
-            // append infill areas to fill_surfaces
-            this->fill_surfaces->append(
-                offset2_ex(
-                    pp,
-                    -inset -min_perimeter_infill_spacing/2,
-                    +min_perimeter_infill_spacing/2),
-                stInternal);
-        }
+        // simplify infill contours according to resolution
+        Polygons pp;
+        for (ExPolygon &ex : union_ex(last))
+            ex.simplify_p(SCALED_RESOLUTION, &pp);
+        // collapse too narrow infill areas
+        coord_t min_perimeter_infill_spacing = ispacing * (1 - INSET_OVERLAP_TOLERANCE);
+        // append infill areas to fill_surfaces
+        this->fill_surfaces->append(
+            offset2_ex(
+                pp,
+                -inset -min_perimeter_infill_spacing/2,
+                +min_perimeter_infill_spacing/2),
+            stInternal);
     } // for each island
 }
 
@@ -374,7 +366,7 @@ PerimeterGenerator::_traverse_loops(const PerimeterGeneratorLoops &loops,
             // reapply the nearest point search for starting point
             // We allow polyline reversal because Clipper may have randomly
             // reversed polylines during clipping.
-            paths = ExtrusionEntityCollection(paths).chained_path();
+            paths = (ExtrusionPaths)ExtrusionEntityCollection(paths).chained_path();
         } else {
             ExtrusionPath path(role);
             path.polyline   = loop->polygon.split_at_first_point();
@@ -399,7 +391,7 @@ PerimeterGenerator::_traverse_loops(const PerimeterGeneratorLoops &loops,
     // sort entities into a new collection using a nearest-neighbor search,
     // preserving the original indices which are useful for detecting thin walls
     ExtrusionEntityCollection sorted_coll;
-    coll.chained_path(&sorted_coll, false, &sorted_coll.orig_indices);
+    coll.chained_path(&sorted_coll, false, erMixed, &sorted_coll.orig_indices);
     
     // traverse children and build the final collection
     ExtrusionEntityCollection entities;

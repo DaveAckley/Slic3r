@@ -14,14 +14,19 @@ class Polygon;
 typedef std::vector<Polygon> Polygons;
 
 class Polygon : public MultiPoint {
-    public:
+public:
     operator Polygons() const;
     operator Polyline() const;
     Point& operator[](Points::size_type idx);
     const Point& operator[](Points::size_type idx) const;
     
-    Polygon() {};
-    explicit Polygon(const Points &points): MultiPoint(points) {};
+    Polygon() {}
+    explicit Polygon(const Points &points): MultiPoint(points) {}
+    Polygon(const Polygon &other) : MultiPoint(other.points) {}
+    Polygon(Polygon &&other) : MultiPoint(std::move(other.points)) {}
+    Polygon& operator=(const Polygon &other) { points = other.points; return *this; }
+    Polygon& operator=(Polygon &&other) { points = std::move(other.points); return *this; }
+
     Point last_point() const;
     virtual Lines lines() const;
     Polyline split_at_vertex(const Point &point) const;
@@ -46,6 +51,8 @@ class Polygon : public MultiPoint {
     std::string wkt() const;
     Points concave_points(double angle = PI) const;
     Points convex_points(double angle = PI) const;
+    // Projection of a point onto the polygon.
+    Point point_projection(const Point &point) const;
 };
 
 extern BoundingBox get_extents(const Polygon &poly);
@@ -53,6 +60,13 @@ extern BoundingBox get_extents(const Polygons &polygons);
 extern BoundingBox get_extents_rotated(const Polygon &poly, double angle);
 extern BoundingBox get_extents_rotated(const Polygons &polygons, double angle);
 extern std::vector<BoundingBox> get_extents_vector(const Polygons &polygons);
+
+inline double total_length(const Polygons &polylines) {
+    double total = 0;
+    for (Polygons::const_iterator it = polylines.begin(); it != polylines.end(); ++it)
+        total += it->length();
+    return total;
+}
 
 // Remove sticks (tentacles with zero area) from the polygon.
 extern bool        remove_sticks(Polygon &poly);
@@ -64,20 +78,40 @@ extern bool        remove_small(Polygons &polys, double min_area);
 
 // Append a vector of polygons at the end of another vector of polygons.
 inline void        polygons_append(Polygons &dst, const Polygons &src) { dst.insert(dst.end(), src.begin(), src.end()); }
-#if SLIC3R_CPPVER >= 11
+
 inline void        polygons_append(Polygons &dst, Polygons &&src) 
 {
-    if (dst.empty())
+    if (dst.empty()) {
         dst = std::move(src);
-    else
+    } else {
         std::move(std::begin(src), std::end(src), std::back_inserter(dst));
+        src.clear();
+    }
 }
-#endif
 
 inline void polygons_rotate(Polygons &polys, double angle)
 {
-    for (Polygons::iterator p = polys.begin(); p != polys.end(); ++p)
-        p->rotate(angle);
+    const double cos_angle = cos(angle);
+    const double sin_angle = sin(angle);
+    for (Polygon &p : polys)
+        p.rotate(cos_angle, sin_angle);
+}
+
+inline Points to_points(const Polygon &poly)
+{
+    return poly.points;
+}
+
+inline Points to_points(const Polygons &polys) 
+{
+    size_t n_points = 0;
+    for (size_t i = 0; i < polys.size(); ++ i)
+        n_points += polys[i].points.size();
+    Points points;
+    points.reserve(n_points);
+    for (const Polygon &poly : polys)
+        append(points, poly.points);
+    return points;
 }
 
 inline Lines to_lines(const Polygon &poly) 
@@ -166,7 +200,7 @@ namespace boost { namespace polygon {
         }
 
         // Get the winding direction of the polygon
-        static inline winding_direction winding(const Slic3r::Polygon& t) {
+        static inline winding_direction winding(const Slic3r::Polygon& /* t */) {
             return unknown_winding;
         }
     };
@@ -207,8 +241,8 @@ namespace boost { namespace polygon {
         }
 
         //don't worry about these, just return false from them
-        static inline bool clean(const Slic3r::Polygons& polygon_set) { return false; }
-        static inline bool sorted(const Slic3r::Polygons& polygon_set) { return false; }
+        static inline bool clean(const Slic3r::Polygons& /* polygon_set */) { return false; }
+        static inline bool sorted(const Slic3r::Polygons& /* polygon_set */) { return false; }
     };
 
     template <>

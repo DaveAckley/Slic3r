@@ -148,7 +148,6 @@ bool Print::invalidate_state_by_config_options(const std::vector<t_config_option
         steps_ignore.insert("use_firmware_retraction");
         steps_ignore.insert("use_relative_e_distances");
         steps_ignore.insert("use_volumetric_e");
-        steps_ignore.insert("set_and_wait_temperatures");
         steps_ignore.insert("variable_layer_height");
         steps_ignore.insert("wipe");
     }
@@ -509,9 +508,7 @@ std::string Print::validate() const
         {
             Polygons convex_hulls_other;
             for (PrintObject *object : this->objects) {
-                // Get convex hull of all meshes assigned to this print object
-                // (this is the same as model_object()->raw_mesh.convex_hull()
-                // but probably more efficient.
+                // Get convex hull of all meshes assigned to this print object.
                 Polygon convex_hull;
                 {
                     Polygons mesh_convex_hulls;
@@ -582,7 +579,7 @@ std::string Print::validate() const
             bool was_layer_height_profile_valid = object->layer_height_profile_valid;
             object->update_layer_height_profile();
             object->layer_height_profile_valid = was_layer_height_profile_valid;
-            for (size_t i = 1; i < object->layer_height_profile.size(); i += 2)
+            for (size_t i = 5; i < object->layer_height_profile.size(); i += 2)
                 if (object->layer_height_profile[i-1] > slicing_params.object_print_z_min + EPSILON &&
                     std::abs(object->layer_height_profile[i] - object->config.layer_height) > EPSILON)
                     return "The Wipe Tower is currently only supported with constant Z layer spacing. Layer editing is not allowed.";

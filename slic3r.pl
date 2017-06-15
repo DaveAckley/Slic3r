@@ -35,7 +35,6 @@ my %cli_options = ();
         'ignore-nonexistent-config' => \$opt{ignore_nonexistent_config},
         'no-controller'         => \$opt{no_controller},
         'no-plater'             => \$opt{no_plater},
-        'gui-mode=s'            => \$opt{gui_mode},
         'datadir=s'             => \$opt{datadir},
         'export-svg'            => \$opt{export_svg},
         'merge|m'               => \$opt{merge},
@@ -105,7 +104,6 @@ if ((!@ARGV || $opt{gui}) && !$opt{save} && eval "require Slic3r::GUI; 1") {
         $Slic3r::GUI::datadir       = Slic3r::decode_path($opt{datadir} // '');
         $Slic3r::GUI::no_controller = $opt{no_controller};
         $Slic3r::GUI::no_plater     = $opt{no_plater};
-        $Slic3r::GUI::mode          = $opt{gui_mode};
         $Slic3r::GUI::autosave      = $opt{autosave};
     }
     $gui = Slic3r::GUI->new;
@@ -144,7 +142,6 @@ if (@ARGV) {  # slicing from command line
         foreach my $file (@ARGV) {
             $file = Slic3r::decode_path($file);
             my $model = Slic3r::Model->read_from_file($file);
-            $model->add_default_instances;
             my $mesh = $model->mesh;
             $mesh->translate(0, 0, -$mesh->bounding_box->z_min);
             my $upper = Slic3r::TriangleMesh->new;
@@ -164,7 +161,6 @@ if (@ARGV) {  # slicing from command line
         foreach my $file (@ARGV) {
             $file = Slic3r::decode_path($file);
             my $model = Slic3r::Model->read_from_file($file);
-            $model->add_default_instances;
             my $mesh = $model->mesh;
             $mesh->repair;
             
@@ -282,7 +278,6 @@ $j
     --gui               Forces the GUI launch instead of command line slicing (if you
                         supply a model file, it will be loaded into the plater)
     --no-plater         Disable the plater tab
-    --gui-mode          Overrides the configured mode (simple/expert)
     --autosave <file>   Automatically export current configuration to the specified file
 
   Output options:

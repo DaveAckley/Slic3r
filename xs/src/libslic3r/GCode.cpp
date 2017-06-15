@@ -452,7 +452,7 @@ bool GCode::do_export(FILE *file, Print &print)
     if (print.config.first_layer_bed_temperature.value > 0 &&
         boost::ifind_first(print.config.start_gcode.value, std::string("M140")).empty() &&
         boost::ifind_first(print.config.start_gcode.value, std::string("M190")).empty())
-        write(file, m_writer.set_bed_temperature(print.config.first_layer_bed_temperature.value, print.config.set_and_wait_temperatures.value));
+        write(file, m_writer.set_bed_temperature(print.config.first_layer_bed_temperature.value, true));
 
     // Get optimal tool ordering to minimize tool switches of a multi-exruder print.
     // For a print by objects, find the 1st printing object.
@@ -666,10 +666,14 @@ bool GCode::do_export(FILE *file, Print &print)
 
     // Append full config.
     fprintf(file, "\n");
-    for (const std::string &key : print.config.keys())
-        fprintf(file, "; %s = %s\n", key.c_str(), print.config.serialize(key).c_str());
-    for (const std::string &key : print.default_object_config.keys())
-        fprintf(file, "; %s = %s\n", key.c_str(), print.default_object_config.serialize(key).c_str());
+    {
+        StaticPrintConfig *configs[] = { &print.config, &print.default_object_config, &print.default_region_config };
+        for (size_t i = 0; i < sizeof(configs) / sizeof(configs[0]); ++ i) {
+            StaticPrintConfig *cfg = configs[i];
+        for (const std::string &key : cfg->keys())
+            fprintf(file, "; %s = %s\n", key.c_str(), cfg->serialize(key).c_str());
+        }
+    }
 
     return true;
 }
@@ -1062,6 +1066,8 @@ void GCode::process_layer(
                 copies = print_object->_shifted_copies;
             else
                 copies.push_back(print_object->_shifted_copies[single_object_idx]);
+            // Sort the copies by the closest point starting with the current print position.
+            
             for (const Point &copy : copies) {
                 // When starting a new object, use the external motion planner for the first travel move.
                 std::pair<const PrintObject*, Point> this_object_copy(print_object, copy);

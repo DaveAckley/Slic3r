@@ -83,8 +83,8 @@ int
 OozePrevention::_get_temp(GCode &gcodegen)
 {
     return (gcodegen.layer() != NULL && gcodegen.layer()->id() == 0)
-        ? gcodegen.config().first_layer_temperature.get_at(gcodegen.writer().extruder()->id)
-        : gcodegen.config().temperature.get_at(gcodegen.writer().extruder()->id);
+        ? gcodegen.config().first_layer_temperature.get_at(gcodegen.writer().extruder()->id())
+        : gcodegen.config().temperature.get_at(gcodegen.writer().extruder()->id());
 }
 
 std::string
@@ -121,10 +121,8 @@ Wipe::wipe(GCode &gcodegen, bool toolchange)
         wipe_path.clip_end(wipe_path.length() - wipe_dist);
     
         // subdivide the retraction in segments
-        double retracted = 0;
-        Lines lines = wipe_path.lines();
-        for (Lines::const_iterator line = lines.begin(); line != lines.end(); ++line) {
-            double segment_length = line->length();
+        for (const Line &line : wipe_path.lines()) {
+            double segment_length = line.length();
             /*  Reduce retraction length a bit to avoid effective retraction speed to be greater than the configured one
                 due to rounding (TODO: test and/or better math for this)  */
             double dE = length * (segment_length / wipe_dist) * 0.95;
@@ -132,13 +130,11 @@ Wipe::wipe(GCode &gcodegen, bool toolchange)
             // Is it here for the cooling markers? Or should it be outside of the cycle?
             gcode += gcodegen.writer().set_speed(wipe_speed*60, "", gcodegen.enable_cooling_markers() ? ";_WIPE" : "");
             gcode += gcodegen.writer().extrude_to_xy(
-                gcodegen.point_to_gcode(line->b),
+                gcodegen.point_to_gcode(line.b),
                 -dE,
                 "wipe and retract"
             );
-            retracted += dE;
         }
-        gcodegen.writer().extruder()->retracted += retracted;
         
         // prevent wiping again on same path
         this->reset_path();
@@ -169,10 +165,6 @@ std::string WipeTowerIntegration::append_tcr(GCode &gcodegen, const WipeTower::T
     // Let the tool change be executed by the wipe tower class.
     // Inform the G-code writer about the changes done behind its back.
     gcode += tcr.gcode;
-    // Accumulate the elapsed time for the correct calculation of layer cooling.
-    //FIXME currently disabled as Slic3r PE needs to be updated to differentiate the moves it could slow down
-    // from the moves it could not.
-//    gcodegen.m_elapsed_time += tcr.elapsed_time;
     // Let the m_writer know the current extruder_id, but ignore the generated G-code.
 	if (new_extruder_id >= 0 && gcodegen.writer().need_toolchange(new_extruder_id))
         gcodegen.writer().toolchange(new_extruder_id);
@@ -220,7 +212,7 @@ std::string WipeTowerIntegration::finalize(GCode &gcodegen)
     return gcode;
 }
 
-#define EXTRUDER_CONFIG(OPT) m_config.OPT.get_at(m_writer.extruder()->id)
+#define EXTRUDER_CONFIG(OPT) m_config.OPT.get_at(m_writer.extruder()->id())
 
 inline void write(FILE *file, const std::string &what)
 {
@@ -443,16 +435,6 @@ bool GCode::do_export(FILE *file, Print &print)
     // Prepare the helper object for replacing placeholders in custom G-code and output filename.
     m_placeholder_parser = print.placeholder_parser;
     m_placeholder_parser.update_timestamp();
-    
-    // Disable fan.
-    if (print.config.cooling.value && print.config.disable_fan_first_layers.value)
-        write(file, m_writer.set_fan(0, true));
-    
-    // Set bed temperature if the start G-code does not contain any bed temp control G-codes.
-    if (print.config.first_layer_bed_temperature.value > 0 &&
-        boost::ifind_first(print.config.start_gcode.value, std::string("M140")).empty() &&
-        boost::ifind_first(print.config.start_gcode.value, std::string("M190")).empty())
-        write(file, m_writer.set_bed_temperature(print.config.first_layer_bed_temperature.value, true));
 
     // Get optimal tool ordering to minimize tool switches of a multi-exruder print.
     // For a print by objects, find the 1st printing object.
@@ -482,6 +464,23 @@ bool GCode::do_export(FILE *file, Print &print)
     } else {
         final_extruder_id = tool_ordering.last_extruder();
         assert(final_extruder_id != (unsigned int)-1);
+    }
+
+    m_cooling_buffer->set_current_extruder(initial_extruder_id);
+
+    // Disable fan.
+    if (print.config.cooling.get_at(initial_extruder_id) && print.config.disable_fan_first_layers.get_at(initial_extruder_id))
+        write(file, m_writer.set_fan(0, true));
+    
+    // Set bed temperature if the start G-code does not contain any bed temp control G-codes.
+    {
+        // Always call m_writer.set_bed_temperature() so it will set the internal "current" state of the bed temp as if
+        // the custom start G-code emited these.
+        //FIXME Should one parse the custom G-code to initialize the "current" bed temp state at m_writer?
+        std::string gcode = m_writer.set_bed_temperature(print.config.first_layer_bed_temperature.get_at(initial_extruder_id), true);
+        if (boost::ifind_first(print.config.start_gcode.value, std::string("M140")).empty() &&
+            boost::ifind_first(print.config.start_gcode.value, std::string("M190")).empty())
+            write(file, gcode);
     }
 
     // Set extruder(s) temperature before and after start G-code.
@@ -554,7 +553,7 @@ bool GCode::do_export(FILE *file, Print &print)
         std::sort(objects.begin(), objects.end(), [](const PrintObject* po1, const PrintObject* po2) { return po1->size.z < po2->size.z; });        
         size_t finished_objects = 0;
         for (size_t object_id = initial_print_object_id; object_id < objects.size(); ++ object_id) {
-            const PrintObject &object = *print.objects[object_id];
+            const PrintObject &object = *objects[object_id];
             for (const Point &copy : object._shifted_copies) {
                 // Get optimal tool ordering to minimize tool switches of a multi-exruder print.
                 if (object_id != initial_print_object_id || &copy != object._shifted_copies.data()) {
@@ -582,11 +581,13 @@ bool GCode::do_export(FILE *file, Print &print)
                     // Ff we are printing the bottom layer of an object, and we have already finished
                     // another one, set first layer temperatures. This happens before the Z move
                     // is triggered, so machine has more time to reach such temperatures.
-                    if (print.config.first_layer_bed_temperature.value > 0)
-                        write(file, m_writer.set_bed_temperature(print.config.first_layer_bed_temperature));
+                    write(file, m_writer.set_bed_temperature(print.config.first_layer_bed_temperature.get_at(initial_extruder_id)));
                     // Set first layer extruder.
                     this->_print_first_layer_extruder_temperatures(file, print, initial_extruder_id, false);
                 }
+                // Reset the cooling buffer internal state (the current position, feed rate, accelerations).
+                m_cooling_buffer->reset();
+                m_cooling_buffer->set_current_extruder(initial_extruder_id);
                 // Pair the object layers with the support layers by z, extrude them.
                 std::vector<LayerToPrint> layers_to_print = collect_layers_to_print(object);
                 for (const LayerToPrint &ltp : layers_to_print) {
@@ -594,7 +595,8 @@ bool GCode::do_export(FILE *file, Print &print)
                     lrs.emplace_back(std::move(ltp));
                     this->process_layer(file, print, lrs, tool_ordering.tools_for_layer(ltp.print_z()), &copy - object._shifted_copies.data());
                 }
-                write(file, this->filter(m_cooling_buffer->flush(), true));
+                if (m_pressure_equalizer)
+                    write(file, m_pressure_equalizer->process("", true));
                 ++ finished_objects;
                 // Flag indicating whether the nozzle temperature changes from 1st to 2nd layer were performed.
                 // Reset it when starting another object from 1st layer.
@@ -622,7 +624,8 @@ bool GCode::do_export(FILE *file, Print &print)
                 m_wipe_tower->next_layer();
             this->process_layer(file, print, layer.second, layer_tools, size_t(-1));
         }
-        write(file, this->filter(m_cooling_buffer->flush(), true));
+        if (m_pressure_equalizer)
+            write(file, m_pressure_equalizer->process("", true));
         if (m_wipe_tower)
             // Purge the extruder, pull out the active filament.
             write(file, m_wipe_tower->finalize(*this));
@@ -644,12 +647,12 @@ bool GCode::do_export(FILE *file, Print &print)
     print.total_extruded_volume  = 0.;
     print.total_weight           = 0.;
     print.total_cost             = 0.;
-    for (const Extruder &extruder : m_writer.extruders) {
+    for (const Extruder &extruder : m_writer.extruders()) {
         double used_filament   = extruder.used_filament();
         double extruded_volume = extruder.extruded_volume();
         double filament_weight = extruded_volume * extruder.filament_density() * 0.001;
         double filament_cost   = filament_weight * extruder.filament_cost()    * 0.001;
-        print.filament_stats.insert(std::pair<size_t,float>(extruder.id, used_filament));
+        print.filament_stats.insert(std::pair<size_t,float>(extruder.id(), used_filament));
         fprintf(file, "; filament used = %.1lfmm (%.1lfcm3)\n", used_filament, extruded_volume * 0.001);
         if (filament_weight > 0.) {
             print.total_weight = print.total_weight + filament_weight;
@@ -767,7 +770,7 @@ void GCode::process_layer(
     const Layer         &layer         = (object_layer != nullptr) ? *object_layer : *support_layer;    
     coordf_t             print_z       = layer.print_z;
     bool                 first_layer   = layer.id() == 0;
-    unsigned int         first_extruder_id = layer_tools.extruders.empty() ? 0 : layer_tools.extruders.front();
+    unsigned int         first_extruder_id = layer_tools.extruders.front();
 
     // Initialize config with the 1st object to be printed at this layer.
     m_config.apply(layer.object()->config, true);
@@ -811,16 +814,15 @@ void GCode::process_layer(
     if (! first_layer && ! m_second_layer_things_done) {
         // Transition from 1st to 2nd layer. Adjust nozzle temperatures as prescribed by the nozzle dependent
         // first_layer_temperature vs. temperature settings.
-        for (const Extruder &extruder : m_writer.extruders) {
-            if (print.config.single_extruder_multi_material.value && extruder.id != m_writer.extruder()->id)
+        for (const Extruder &extruder : m_writer.extruders()) {
+            if (print.config.single_extruder_multi_material.value && extruder.id() != m_writer.extruder()->id())
                 // In single extruder multi material mode, set the temperature for the current extruder only.
                 continue;
-            int temperature = print.config.temperature.get_at(extruder.id);
-            if (temperature > 0 && temperature != print.config.first_layer_temperature.get_at(extruder.id))
-                gcode += m_writer.set_temperature(temperature, false, extruder.id);
+            int temperature = print.config.temperature.get_at(extruder.id());
+            if (temperature > 0 && temperature != print.config.first_layer_temperature.get_at(extruder.id()))
+                gcode += m_writer.set_temperature(temperature, false, extruder.id());
         }
-        if (print.config.bed_temperature.value > 0 && print.config.bed_temperature != print.config.first_layer_bed_temperature.value)
-            gcode += m_writer.set_bed_temperature(print.config.bed_temperature);
+        gcode += m_writer.set_bed_temperature(print.config.bed_temperature.get_at(first_extruder_id));
         // Mark the temperature transition from 1st to 2nd layer to be finished.
         m_second_layer_things_done = true;
     }
@@ -881,28 +883,45 @@ void GCode::process_layer(
         if (layer_to_print.support_layer != nullptr) {
             const SupportLayer &support_layer = *layer_to_print.support_layer;
             const PrintObject  &object = *support_layer.object();
-            if (support_layer.support_fills.entities.size() > 0) {
+            if (! support_layer.support_fills.entities.empty()) {
+                ExtrusionRole   role               = support_layer.support_fills.role();
+                bool            has_support        = role == erMixed || role == erSupportMaterial;
+                bool            has_interface      = role == erMixed || role == erSupportMaterialInterface;
+                // Extruder ID of the support base. -1 if "don't care".
+                unsigned int    support_extruder   = object.config.support_material_extruder.value - 1;
+                // Shall the support be printed with the active extruder, preferably with non-soluble, to avoid tool changes?
+                bool            support_dontcare   = object.config.support_material_extruder.value == 0;
+                // Extruder ID of the support interface. -1 if "don't care".
+                unsigned int    interface_extruder = object.config.support_material_interface_extruder.value - 1;
+                // Shall the support interface be printed with the active extruder, preferably with non-soluble, to avoid tool changes?
+                bool            interface_dontcare = object.config.support_material_interface_extruder.value == 0;
+                if (support_dontcare || interface_dontcare) {
+                    // Some support will be printed with "don't care" material, preferably non-soluble.
+                    // Is the current extruder assigned a soluble filament?
+                    unsigned int dontcare_extruder = first_extruder_id;
+                    if (print.config.filament_soluble.get_at(dontcare_extruder)) {
+                        // The last extruder printed on the previous layer extrudes soluble filament.
+                        // Try to find a non-soluble extruder on the same layer.
+                        for (unsigned int extruder_id : layer_tools.extruders)
+                            if (! print.config.filament_soluble.get_at(extruder_id)) {
+                                dontcare_extruder = extruder_id;
+                                break;
+                            }
+                    }
+                    if (support_dontcare)
+                        support_extruder = dontcare_extruder;
+                    if (interface_dontcare)
+                        interface_extruder = dontcare_extruder;
+                }
                 // Both the support and the support interface are printed with the same extruder, therefore
                 // the interface may be interleaved with the support base.
-                // Don't change extruder if the extruder is set to 0. Use the current extruder instead.
-                bool single_extruder = 
-                    (object.config.support_material_extruder.value == object.config.support_material_interface_extruder.value ||
-                    (object.config.support_material_extruder.value == int(first_extruder_id) && object.config.support_material_interface_extruder.value == 0) ||
-                    (object.config.support_material_interface_extruder.value == int(first_extruder_id) && object.config.support_material_extruder.value == 0));
+                bool single_extruder = ! has_support || support_extruder == interface_extruder;
                 // Assign an extruder to the base.
-                ObjectByExtruder &obj = object_by_extruder(
-                    by_extruder,
-                    (object.config.support_material_extruder == 0) ? first_extruder_id : (object.config.support_material_extruder - 1),
-                    &layer_to_print - layers.data(),
-                    layers.size());
+                ObjectByExtruder &obj = object_by_extruder(by_extruder, support_extruder, &layer_to_print - layers.data(), layers.size());
                 obj.support = &support_layer.support_fills;
                 obj.support_extrusion_role = single_extruder ? erMixed : erSupportMaterial;
-                if (! single_extruder) {
-                    ObjectByExtruder &obj_interface = object_by_extruder(
-                        by_extruder,
-                        (object.config.support_material_interface_extruder == 0) ? first_extruder_id : (object.config.support_material_interface_extruder - 1),
-                        &layer_to_print - layers.data(),
-                        layers.size());
+                if (! single_extruder && has_interface) {
+                    ObjectByExtruder &obj_interface = object_by_extruder(by_extruder, interface_extruder, &layer_to_print - layers.data(), layers.size());
                     obj_interface.support = &support_layer.support_fills;
                     obj_interface.support_extrusion_role = erSupportMaterialInterface;
                 }
@@ -1099,28 +1118,21 @@ void GCode::process_layer(
     // (we must feed all the G-code into the post-processor, including the first 
     // bottom non-spiral layers otherwise it will mess with positions)
     // we apply spiral vase at this stage because it requires a full layer.
-    // Just a reminder: A spiral vase mode is allowed for a single object, single material print only.
+    // Just a reminder: A spiral vase mode is allowed for a single object per layer, single material print only.
     if (m_spiral_vase)
         gcode = m_spiral_vase->process_layer(gcode);
 
     // Apply cooling logic; this may alter speeds.
     if (m_cooling_buffer)
-        //FIXME Update the CoolingBuffer class to ignore the object ID, which does not make sense anymore
-        // once all extrusions of a layer are processed at once.
-        // Update the test cases.
-        gcode = m_cooling_buffer->append(gcode, 0, layer.id(), false);
-    write(file, this->filter(std::move(gcode), false));
-}
+        gcode = m_cooling_buffer->process_layer(gcode, layer.id());
 
-std::string GCode::filter(std::string &&gcode, bool flush)
-{
-    // apply pressure equalization if enabled;
+    // Apply pressure equalization if enabled;
     // printf("G-code before filter:\n%s\n", gcode.c_str());
-    std::string out = m_pressure_equalizer ? 
-        m_pressure_equalizer->process(gcode.c_str(), flush) :
-        std::move(gcode);
+    if (m_pressure_equalizer)
+        gcode = m_pressure_equalizer->process(gcode.c_str(), false);
     // printf("G-code after filter:\n%s\n", out.c_str());
-    return out;
+
+    write(file, gcode);
 }
 
 void GCode::apply_print_config(const PrintConfig &print_config)
@@ -1789,7 +1801,7 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
     }
     
     // calculate extrusion length per distance unit
-    double e_per_mm = m_writer.extruder()->e_per_mm3 * path.mm3_per_mm;
+    double e_per_mm = m_writer.extruder()->e_per_mm3() * path.mm3_per_mm;
     if (m_writer.extrusion_axis().empty()) e_per_mm = 0;
     
     // set speed
@@ -1841,10 +1853,18 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
             gcode += buf;
         }
     }
-    if (is_bridge(path.role()) && m_enable_cooling_markers)
-        gcode += ";_BRIDGE_FAN_START\n";
-    gcode += m_writer.set_speed(F, "", m_enable_cooling_markers ? ";_EXTRUDE_SET_SPEED" : "");
-    double path_length = 0;
+    std::string comment;
+    if (m_enable_cooling_markers) {
+        if (is_bridge(path.role()))
+            gcode += ";_BRIDGE_FAN_START\n";
+        else
+            comment = ";_EXTRUDE_SET_SPEED";
+        if (path.role() == erExternalPerimeter)
+            comment += ";_EXTERNAL_PERIMETER";
+    }
+    // F is mm per minute.
+    gcode += m_writer.set_speed(F, "", comment);
+    double path_length = 0.;
     {
         std::string comment = m_config.gcode_comments ? description : "";
         for (const Line &line : path.polyline.lines()) {
@@ -1856,14 +1876,10 @@ std::string GCode::_extrude(const ExtrusionPath &path, std::string description, 
                 comment);
         }
     }
-    if (is_bridge(path.role()) && m_enable_cooling_markers)
-        gcode += ";_BRIDGE_FAN_END\n";
+    if (m_enable_cooling_markers)
+        gcode += is_bridge(path.role()) ? ";_BRIDGE_FAN_END\n" : ";_EXTRUDE_END\n";
     
     this->set_last_pos(path.last_point());
-    
-    if (m_config.cooling)
-        m_elapsed_time += path_length / F * 60.f;
-    
     return gcode;
 }
 
@@ -1909,19 +1925,10 @@ std::string GCode::travel_to(const Point &point, ExtrusionRole role, std::string
     for (Lines::const_iterator line = lines.begin(); line != lines.end(); ++line)
 	    gcode += m_writer.travel_to_xy(this->point_to_gcode(line->b), comment);
     
-    /*  While this makes the estimate more accurate, CoolingBuffer calculates the slowdown
-        factor on the whole elapsed time but only alters non-travel moves, thus the resulting
-        time is still shorter than the configured threshold. We could create a new 
-        elapsed_travel_time but we would still need to account for bridges, retractions, wipe etc.
-    if (m_config.cooling)
-        m_elapsed_time += unscale(travel.length()) / m_config.get_abs_value("travel_speed");
-    */
-
     return gcode;
 }
 
-bool
-GCode::needs_retraction(const Polyline &travel, ExtrusionRole role)
+bool GCode::needs_retraction(const Polyline &travel, ExtrusionRole role)
 {
     if (travel.length() < scale_(EXTRUDER_CONFIG(retract_before_travel))) {
         // skip retraction if the move is shorter than the configured threshold
@@ -1938,14 +1945,12 @@ GCode::needs_retraction(const Polyline &travel, ExtrusionRole role)
             return false;
     }
 
-    if (m_config.only_retract_when_crossing_perimeters && m_layer != nullptr) {
-        if (m_config.fill_density.value > 0
-            && m_layer->any_internal_region_slice_contains(travel)) {
-            /*  skip retraction if travel is contained in an internal slice *and*
-                internal infill is enabled (so that stringing is entirely not visible)  */
-            return false;
-        }
-    }
+    if (m_config.only_retract_when_crossing_perimeters && m_layer != nullptr &&
+        m_config.fill_density.value > 0 && m_layer->any_internal_region_slice_contains(travel))
+        // Skip retraction if travel is contained in an internal slice *and*
+        // internal infill is enabled (so that stringing is entirely not visible).
+        //FIXME any_internal_region_slice_contains() is potentionally very slow, it shall test for the bounding boxes first.
+        return false;
     
     // retract if only_retract_when_crossing_perimeters is disabled or doesn't apply
     return true;
@@ -1997,7 +2002,7 @@ std::string GCode::set_extruder(unsigned int extruder_id)
     // append custom toolchange G-code
     if (m_writer.extruder() != nullptr && !m_config.toolchange_gcode.value.empty()) {
         PlaceholderParser pp = m_placeholder_parser;
-        pp.set("previous_extruder", m_writer.extruder()->id);
+        pp.set("previous_extruder", m_writer.extruder()->id());
         pp.set("next_extruder",     extruder_id);
         gcode += pp.process(m_config.toolchange_gcode.value) + '\n';
     }

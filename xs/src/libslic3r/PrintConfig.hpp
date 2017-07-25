@@ -165,6 +165,7 @@ class PrintObjectConfig : public virtual StaticPrintConfig
 public:
     ConfigOptionBool                clip_multipart_objects;
     ConfigOptionBool                dont_support_bridges;
+    ConfigOptionFloat               elefant_foot_compensation;
     ConfigOptionFloatOrPercent      extrusion_width;
     ConfigOptionFloatOrPercent      first_layer_height;
     ConfigOptionBool                infill_only_where_needed;
@@ -175,7 +176,7 @@ public:
 //    ConfigOptionFloat               seam_preferred_direction;
 //    ConfigOptionFloat               seam_preferred_direction_jitter;
     ConfigOptionBool                support_material;
-    ConfigOptionInt                 support_material_angle;
+    ConfigOptionFloat               support_material_angle;
     ConfigOptionBool                support_material_buildplate_only;
     ConfigOptionFloat               support_material_contact_distance;
     ConfigOptionInt                 support_material_enforce_layers;
@@ -203,6 +204,7 @@ public:
     virtual ConfigOption* optptr(const t_config_option_key &opt_key, bool create = false) {
         OPT_PTR(clip_multipart_objects);
         OPT_PTR(dont_support_bridges);
+        OPT_PTR(elefant_foot_compensation);
         OPT_PTR(extrusion_width);
         OPT_PTR(first_layer_height);
         OPT_PTR(infill_only_where_needed);
@@ -425,35 +427,35 @@ class PrintConfig : public GCodeConfig
 public:
     ConfigOptionBool                avoid_crossing_perimeters;
     ConfigOptionPoints              bed_shape;
-    ConfigOptionInt                 bed_temperature;
+    ConfigOptionInts                bed_temperature;
     ConfigOptionFloat               bridge_acceleration;
-    ConfigOptionInt                 bridge_fan_speed;
+    ConfigOptionInts                bridge_fan_speed;
     ConfigOptionFloat               brim_width;
     ConfigOptionBool                complete_objects;
-    ConfigOptionBool                cooling;
+    ConfigOptionBools               cooling;
     ConfigOptionFloat               default_acceleration;
-    ConfigOptionInt                 disable_fan_first_layers;
+    ConfigOptionInts                disable_fan_first_layers;
     ConfigOptionFloat               duplicate_distance;
     ConfigOptionFloat               extruder_clearance_height;
     ConfigOptionFloat               extruder_clearance_radius;
     ConfigOptionStrings             extruder_colour;
     ConfigOptionPoints              extruder_offset;
-    ConfigOptionBool                fan_always_on;
-    ConfigOptionInt                 fan_below_layer_time;
+    ConfigOptionBools               fan_always_on;
+    ConfigOptionInts                fan_below_layer_time;
     ConfigOptionStrings             filament_colour;
     ConfigOptionStrings             filament_notes;
     ConfigOptionFloat               first_layer_acceleration;
-    ConfigOptionInt                 first_layer_bed_temperature;
+    ConfigOptionInts                first_layer_bed_temperature;
     ConfigOptionFloatOrPercent      first_layer_extrusion_width;
     ConfigOptionFloatOrPercent      first_layer_speed;
     ConfigOptionInts                first_layer_temperature;
     ConfigOptionFloat               infill_acceleration;
     ConfigOptionBool                infill_first;
-    ConfigOptionInt                 max_fan_speed;
+    ConfigOptionInts                max_fan_speed;
     ConfigOptionFloats              max_layer_height;
-    ConfigOptionInt                 min_fan_speed;
+    ConfigOptionInts                min_fan_speed;
     ConfigOptionFloats              min_layer_height;
-    ConfigOptionFloat               min_print_speed;
+    ConfigOptionFloats              min_print_speed;
     ConfigOptionFloat               min_skirt_length;
     ConfigOptionString              notes;
     ConfigOptionFloats              nozzle_diameter;
@@ -469,7 +471,7 @@ public:
     ConfigOptionFloat               skirt_distance;
     ConfigOptionInt                 skirt_height;
     ConfigOptionInt                 skirts;
-    ConfigOptionInt                 slowdown_below_layer_time;
+    ConfigOptionInts                slowdown_below_layer_time;
     ConfigOptionBool                spiral_vase;
     ConfigOptionInt                 standby_temperature_delta;
     ConfigOptionInts                temperature;

@@ -401,8 +401,6 @@ bool Print::apply_config(DynamicPrintConfig config)
             // The layer_height_profile is not valid for some reason (updated by the user or invalidated due to some option change).
             // Invalidate the slicing step, which in turn invalidates everything.
             object->invalidate_step(posSlice);
-            // Following line sets the layer_height_profile_valid flag.
-            object->update_layer_height_profile();
             // Trigger recalculation.
             invalidated = true;
         }
@@ -478,13 +476,15 @@ exit_for_rearrange_regions:
         for (PrintObject *object : this->objects)
             model_objects.push_back(object->model_object());
         this->clear_objects();
-        for (ModelObject *mo : model_objects) {
+        for (ModelObject *mo : model_objects)
             this->add_model_object(mo);
-            // Update layer_height_profile from the main thread as it may pull the data from the associated ModelObject.
-            this->objects.back()->update_layer_height_profile();
-        }
         invalidated = true;
     }
+
+    // Always make sure that the layer_height_profiles are set, as they should not be modified from the worker threads.
+    for (PrintObject *object : this->objects)
+        if (! object->layer_height_profile_valid)
+            object->update_layer_height_profile();
     
     return invalidated;
 }
@@ -550,13 +550,14 @@ std::string Print::validate() const
         size_t total_copies_count = 0;
         for (const PrintObject *object : this->objects)
             total_copies_count += object->copies().size();
-        if (total_copies_count > 1)
+        // #4043
+        if (total_copies_count > 1 && ! this->config.complete_objects.value)
             return "The Spiral Vase option can only be used when printing a single object.";
         if (this->regions.size() > 1)
             return "The Spiral Vase option can only be used when printing single material objects.";
     }
 
-    if (this->config.wipe_tower && ! this->objects.empty()) {
+    if (this->has_wipe_tower() && ! this->objects.empty()) {
         for (auto dmr : this->config.nozzle_diameter.values)
             if (std::abs(dmr - 0.4) > EPSILON)
                 return "The Wipe Tower is currently only supported for the 0.4mm nozzle diameter.";
@@ -900,8 +901,45 @@ void Print::_make_skirt()
     this->skirt.reverse();
 }
 
+void Print::_make_brim()
+{
+    // Brim is only printed on first layer and uses perimeter extruder.
+    Flow        flow = this->brim_flow();
+    Polygons    islands;
+    for (PrintObject *object : this->objects) {
+        Polygons object_islands;
+        for (ExPolygon &expoly : object->layers.front()->slices.expolygons)
+            object_islands.push_back(expoly.contour);
+        if (! object->support_layers.empty())
+            object->support_layers.front()->support_fills.polygons_covered_by_spacing(object_islands, float(SCALED_EPSILON));
+        islands.reserve(islands.size() + object_islands.size() * object->_shifted_copies.size());
+        for (const Point &pt : object->_shifted_copies)
+            for (Polygon &poly : object_islands) {
+                islands.push_back(poly);
+                islands.back().translate(pt);
+            }
+    }
+    Polygons loops;
+    size_t num_loops = size_t(floor(this->config.brim_width.value / flow.width));
+    for (size_t i = 0; i < num_loops; ++ i) {
+        islands = offset(islands, float(flow.scaled_spacing()), jtSquare);
+        for (Polygon &poly : islands) {
+            // poly.simplify(SCALED_RESOLUTION);
+            poly.points.push_back(poly.points.front());
+            Points p = MultiPoint::_douglas_peucker(poly.points, SCALED_RESOLUTION);
+            p.pop_back();
+            poly.points = std::move(p);
+        }
+        polygons_append(loops, offset(islands, -0.5f * float(flow.scaled_spacing())));
+    }
+    
+    loops = union_pt_chained(loops, false);
+    std::reverse(loops.begin(), loops.end());
+    extrusion_entities_append_loops(this->brim.entities, std::move(loops), erSkirt, float(flow.mm3_per_mm()), float(flow.width), float(this->skirt_first_layer_height()));
+}
+
 // Wipe tower support.
-bool Print::has_wipe_tower()
+bool Print::has_wipe_tower() const
 {
     return 
         this->config.single_extruder_multi_material.value && 

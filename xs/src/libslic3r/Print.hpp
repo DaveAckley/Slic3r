@@ -277,9 +277,10 @@ public:
     void auto_assign_extruders(ModelObject* model_object) const;
 
     void _make_skirt();
+    void _make_brim();
 
     // Wipe tower support.
-    bool has_wipe_tower();
+    bool has_wipe_tower() const;
     void _clear_wipe_tower();
     void _make_wipe_tower();
     // Tool ordering of a non-sequential print has to be known to calculate the wipe tower.

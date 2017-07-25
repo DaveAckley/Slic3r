@@ -18,19 +18,22 @@ and the print is modified to stretch over a minimum layer time.
 
 class CoolingBuffer {
 public:
-    CoolingBuffer(GCode &gcodegen) : m_gcodegen(gcodegen), m_elapsed_time(0.), m_layer_id(0) {}
-    std::string append(const std::string &gcode, size_t object_id, size_t layer_id, bool is_support);
-    std::string flush();
-    GCode* 	    gcodegen() { return &m_gcodegen; };
-    
+    CoolingBuffer(GCode &gcodegen);
+    void        reset();
+    void        set_current_extruder(unsigned int extruder_id) { m_current_extruder = extruder_id; }
+    std::string process_layer(const std::string &gcode, size_t layer_id);
+    GCode* 	    gcodegen() { return &m_gcodegen; }
+
 private:
 	CoolingBuffer& operator=(const CoolingBuffer&);
 
     GCode&              m_gcodegen;
     std::string         m_gcode;
-    float               m_elapsed_time;
-    size_t              m_layer_id;
-    std::set<size_t>	m_object_ids_visited;
+    // Internal data.
+    // X,Y,Z,E,F
+    std::vector<char>   m_axis;
+    std::vector<float>  m_current_pos;
+    unsigned int        m_current_extruder;
 };
 
 }

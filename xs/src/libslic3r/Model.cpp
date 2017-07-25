@@ -1,6 +1,8 @@
 #include "Model.hpp"
 #include "Geometry.hpp"
 
+#include <float.h>
+
 namespace Slic3r {
 
 Model::Model(const Model &other)
@@ -496,7 +498,7 @@ void ModelObject::center_around_origin()
             // apply rotation and scaling to vector as well before translating instance,
             // in order to leave final position unaltered
             Vectorf3 v = vector.negative();
-            v.rotate(i->rotation, i->offset);
+            v.rotate(i->rotation);
             v.scale(i->scaling_factor);
             i->offset.translate(v.x, v.y);
         }
@@ -639,19 +641,22 @@ void ModelObject::split(ModelObjectPtrs* new_objects)
     
     ModelVolume* volume = this->volumes.front();
     TriangleMeshPtrs meshptrs = volume->mesh.split();
-    for (TriangleMeshPtrs::iterator mesh = meshptrs.begin(); mesh != meshptrs.end(); ++mesh) {
-        (*mesh)->repair();
+    for (TriangleMesh *mesh : meshptrs) {
+        // Snap the mesh to Z=0.
+        float z0 = FLT_MAX;
+        
+        mesh->repair();
         
         ModelObject* new_object = m_model->add_object(*this, false);
         new_object->input_file  = "";
-        ModelVolume* new_volume = new_object->add_volume(**mesh);
+        ModelVolume* new_volume = new_object->add_volume(*mesh);
         new_volume->name        = volume->name;
         new_volume->config      = volume->config;
         new_volume->modifier    = volume->modifier;
         new_volume->material_id(volume->material_id());
         
         new_objects->push_back(new_object);
-        delete *mesh;
+        delete mesh;
     }
     
     return;
@@ -683,6 +688,36 @@ ModelMaterial* ModelVolume::assign_unique_material()
     // as material-id "0" is reserved by the AMF spec we start from 1
     this->_material_id = 1 + model->materials.size();  // watchout for implicit cast
     return model->add_material(this->_material_id);
+}
+
+// Split this volume, append the result to the object owning this volume.
+// Return the number of volumes created from this one.
+// This is useful to assign different materials to different volumes of an object.
+size_t ModelVolume::split()
+{
+    TriangleMeshPtrs meshptrs = this->mesh.split();
+    if (meshptrs.size() <= 1) {
+        delete meshptrs.front();
+        return 1;
+    }
+
+    size_t idx = 0;
+    size_t ivolume = std::find(this->object->volumes.begin(), this->object->volumes.end(), this) - this->object->volumes.begin();
+    std::string name = this->name;
+    for (TriangleMesh *mesh : meshptrs) {
+        mesh->repair();
+        if (idx == 0)
+            this->mesh = std::move(*mesh);
+        else
+            this->object->volumes.insert(this->object->volumes.begin() + (++ ivolume), new ModelVolume(object, *this, std::move(*mesh)));
+        char str_idx[64];
+        sprintf(str_idx, "_%d", idx + 1);
+        this->object->volumes[ivolume]->name = name + str_idx;
+        delete mesh;
+        ++ idx;
+    }
+    
+    return idx;
 }
 
 void ModelInstance::transform_mesh(TriangleMesh* mesh, bool dont_translate) const

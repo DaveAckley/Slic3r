@@ -70,27 +70,6 @@ void Layer::merge_slices()
     }
 }
 
-template <class T>
-bool Layer::any_internal_region_slice_contains(const T &item) const
-{
-    FOREACH_LAYERREGION(this, layerm) {
-        if ((*layerm)->slices.any_internal_contains(item)) return true;
-    }
-    return false;
-}
-template bool Layer::any_internal_region_slice_contains<Polyline>(const Polyline &item) const;
-
-template <class T>
-bool Layer::any_bottom_region_slice_contains(const T &item) const
-{
-    FOREACH_LAYERREGION(this, layerm) {
-        if ((*layerm)->slices.any_bottom_contains(item)) return true;
-    }
-    return false;
-}
-template bool Layer::any_bottom_region_slice_contains<Polyline>(const Polyline &item) const;
-
-
 // Here the perimeters are created cummulatively for all layer regions sharing the same parameters influencing the perimeters.
 // The perimeter paths and the thin fills (ExtrusionEntityCollection) are assigned to the first compatible layer region.
 // The resulting fill surface is split back among the originating regions.
@@ -118,6 +97,7 @@ void Layer::make_perimeters()
             if (config.perimeter_extruder   == other_config.perimeter_extruder
                 && config.perimeters        == other_config.perimeters
                 && config.perimeter_speed   == other_config.perimeter_speed
+                && config.external_perimeter_speed == other_config.external_perimeter_speed
                 && config.gap_fill_speed    == other_config.gap_fill_speed
                 && config.overhangs         == other_config.overhangs
                 && config.serialize("perimeter_extrusion_width").compare(other_config.serialize("perimeter_extrusion_width")) == 0

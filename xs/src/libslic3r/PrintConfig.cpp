@@ -26,14 +26,18 @@ PrintConfigDef::PrintConfigDef()
         def->default_value = opt;
     }
     
-    def = this->add("bed_temperature", coInt);
+    def = this->add("bed_temperature", coInts);
     def->label = "Other layers";
     def->tooltip = "Bed temperature for layers after the first one. Set this to zero to disable bed temperature control commands in the output.";
-    def->cli = "bed-temperature=i";
+    def->cli = "bed-temperature=i@";
     def->full_label = "Bed temperature";
     def->min = 0;
     def->max = 300;
-    def->default_value = new ConfigOptionInt(0);
+    {
+        ConfigOptionInts* opt = new ConfigOptionInts();
+        opt->values.push_back(0);
+        def->default_value = opt;
+    }
 
     def = this->add("before_layer_gcode", coString);
     def->label = "Before layer change G-code";
@@ -61,14 +65,18 @@ PrintConfigDef::PrintConfigDef()
     def->min = 0;
     def->default_value = new ConfigOptionFloat(0);
 
-    def = this->add("bridge_fan_speed", coInt);
+    def = this->add("bridge_fan_speed", coInts);
     def->label = "Bridges fan speed";
     def->tooltip = "This fan speed is enforced during all bridges and overhangs.";
     def->sidetext = "%";
-    def->cli = "bridge-fan-speed=i";
+    def->cli = "bridge-fan-speed=i@";
     def->min = 0;
     def->max = 100;
-    def->default_value = new ConfigOptionInt(100);
+    {
+        ConfigOptionInts* opt = new ConfigOptionInts();
+        opt->values.push_back(100);
+        def->default_value = opt;
+    }
 
     def = this->add("bridge_flow_ratio", coFloat);
     def->label = "Bridge flow ratio";
@@ -108,11 +116,15 @@ PrintConfigDef::PrintConfigDef()
     def->cli = "complete-objects!";
     def->default_value = new ConfigOptionBool(false);
 
-    def = this->add("cooling", coBool);
+    def = this->add("cooling", coBools);
     def->label = "Enable auto cooling";
     def->tooltip = "This flag enables the automatic cooling logic that adjusts print speed and fan speed according to layer printing time.";
     def->cli = "cooling!";
-    def->default_value = new ConfigOptionBool(true);
+    {
+        ConfigOptionBools* opt = new ConfigOptionBools();
+        opt->values.push_back(true);
+        def->default_value = opt;
+    }
 
     def = this->add("default_acceleration", coFloat);
     def->label = "Default";
@@ -122,14 +134,18 @@ PrintConfigDef::PrintConfigDef()
     def->min = 0;
     def->default_value = new ConfigOptionFloat(0);
 
-    def = this->add("disable_fan_first_layers", coInt);
+    def = this->add("disable_fan_first_layers", coInts);
     def->label = "Disable fan for the first";
     def->tooltip = "You can set this to a positive value to disable fan at all during the first layers, so that it does not make adhesion worse.";
     def->sidetext = "layers";
-    def->cli = "disable-fan-first-layers=i";
+    def->cli = "disable-fan-first-layers=i@";
     def->min = 0;
     def->max = 1000;
-    def->default_value = new ConfigOptionInt(3);
+    {
+        ConfigOptionInts* opt = new ConfigOptionInts();
+        opt->values.push_back(3);
+        def->default_value = opt;
+    }
 
     def = this->add("dont_support_bridges", coBool);
     def->label = "Don't support bridges";
@@ -146,6 +162,15 @@ PrintConfigDef::PrintConfigDef()
     def->aliases.push_back("multiply_distance");
     def->min = 0;
     def->default_value = new ConfigOptionFloat(6);
+
+    def = this->add("elefant_foot_compensation", coFloat);
+    def->label = "Elefant foot compensation";
+    def->category = "Advanced";
+    def->tooltip = "The first layer will be shrunk in the XY plane by the configured value to compensate for the 1st layer squish aka an Elefant Foot effect.";
+    def->sidetext = "mm";
+    def->cli = "elefant-foot-compensation=f";
+    def->min = 0;
+    def->default_value = new ConfigOptionFloat(0);
 
     def = this->add("end_gcode", coString);
     def->label = "End G-code";
@@ -231,7 +256,7 @@ PrintConfigDef::PrintConfigDef()
     def->gui_type = "i_enum_open";
     def->label = "Extruder";
     def->category = "Extruders";
-    def->tooltip = "The extruder to use (unless more specific extruder settings are specified).";
+    def->tooltip = "The extruder to use (unless more specific extruder settings are specified). This value overrides perimeter and infill extruders, but not the support extruders.";
     def->cli = "extruder=i";
     def->min = 0;  // 0 = inherit defaults
     def->enum_labels.push_back("default");  // override label for item 0
@@ -304,21 +329,29 @@ PrintConfigDef::PrintConfigDef()
     def->cli = "extrusion-width=s";
     def->default_value = new ConfigOptionFloatOrPercent(0, false);
 
-    def = this->add("fan_always_on", coBool);
+    def = this->add("fan_always_on", coBools);
     def->label = "Keep fan always on";
     def->tooltip = "If this is enabled, fan will never be disabled and will be kept running at least at its minimum speed. Useful for PLA, harmful for ABS.";
     def->cli = "fan-always-on!";
-    def->default_value = new ConfigOptionBool(false);
+    {
+        ConfigOptionBools* opt = new ConfigOptionBools();
+        opt->values.push_back(false);
+        def->default_value = opt;
+    }
 
-    def = this->add("fan_below_layer_time", coInt);
+    def = this->add("fan_below_layer_time", coInts);
     def->label = "Enable fan if layer print time is below";
     def->tooltip = "If layer print time is estimated below this number of seconds, fan will be enabled and its speed will be calculated by interpolating the minimum and maximum speeds.";
     def->sidetext = "approximate seconds";
-    def->cli = "fan-below-layer-time=i";
+    def->cli = "fan-below-layer-time=i@";
     def->width = 60;
     def->min = 0;
     def->max = 1000;
-    def->default_value = new ConfigOptionInt(60);
+    {
+        ConfigOptionInts* opt = new ConfigOptionInts();
+        opt->values.push_back(60);
+        def->default_value = opt;
+    }
 
     def = this->add("filament_colour", coStrings);
     def->label = "Color";
@@ -431,9 +464,9 @@ PrintConfigDef::PrintConfigDef()
     def->category = "Infill";
     def->tooltip = "Default base angle for infill orientation. Cross-hatching will be applied to this. Bridges will be infilled using the best direction Slic3r can detect, so this setting does not affect them.";
     def->sidetext = "°";
-    def->cli = "fill-angle=i";
+    def->cli = "fill-angle=f";
     def->min = 0;
-    def->max = 359;
+    def->max = 360;
     def->default_value = new ConfigOptionFloat(45);
 
     def = this->add("fill_density", coPercent);
@@ -516,13 +549,17 @@ PrintConfigDef::PrintConfigDef()
     def->min = 0;
     def->default_value = new ConfigOptionFloat(0);
 
-    def = this->add("first_layer_bed_temperature", coInt);
+    def = this->add("first_layer_bed_temperature", coInts);
     def->label = "First layer";
     def->tooltip = "Heated build plate temperature for the first layer. Set this to zero to disable bed temperature control commands in the output.";
-    def->cli = "first-layer-bed-temperature=i";
+    def->cli = "first-layer-bed-temperature=i@";
     def->max = 0;
     def->max = 300;
-    def->default_value = new ConfigOptionInt(0);
+    {
+        ConfigOptionInts* opt = new ConfigOptionInts();
+        opt->values.push_back(0);
+        def->default_value = opt;
+    }
 
     def = this->add("first_layer_extrusion_width", coFloatOrPercent);
     def->label = "First layer";
@@ -656,7 +693,7 @@ PrintConfigDef::PrintConfigDef()
     def->sidetext = "mm or %";
     def->cli = "infill-overlap=s";
     def->ratio_over = "perimeter_extrusion_width";
-    def->default_value = new ConfigOptionFloatOrPercent(55, true);
+    def->default_value = new ConfigOptionFloatOrPercent(25, true);
 
     def = this->add("infill_speed", coFloat);
     def->label = "Infill";
@@ -694,14 +731,18 @@ PrintConfigDef::PrintConfigDef()
     def->min = 0;
     def->default_value = new ConfigOptionFloat(0.3);
 
-    def = this->add("max_fan_speed", coInt);
+    def = this->add("max_fan_speed", coInts);
     def->label = "Max";
     def->tooltip = "This setting represents the maximum speed of your fan.";
     def->sidetext = "%";
-    def->cli = "max-fan-speed=i";
+    def->cli = "max-fan-speed=i@";
     def->min = 0;
     def->max = 100;
-    def->default_value = new ConfigOptionInt(100);
+    {
+        ConfigOptionInts* opt = new ConfigOptionInts();
+        opt->values.push_back(100);
+        def->default_value = opt;
+    }
 
     def = this->add("max_layer_height", coFloats);
     def->label = "Max";
@@ -749,14 +790,18 @@ PrintConfigDef::PrintConfigDef()
     def->min = 0;
     def->default_value = new ConfigOptionFloat(0);
 
-    def = this->add("min_fan_speed", coInt);
+    def = this->add("min_fan_speed", coInts);
     def->label = "Min";
     def->tooltip = "This setting represents the minimum PWM your fan needs to work.";
     def->sidetext = "%";
-    def->cli = "min-fan-speed=i";
+    def->cli = "min-fan-speed=i@";
     def->min = 0;
     def->max = 100;
-    def->default_value = new ConfigOptionInt(35);
+    {
+        ConfigOptionInts* opt = new ConfigOptionInts();
+        opt->values.push_back(35);
+        def->default_value = opt;
+    }
 
     def = this->add("min_layer_height", coFloats);
     def->label = "Min";
@@ -770,13 +815,17 @@ PrintConfigDef::PrintConfigDef()
         def->default_value = opt;
     }
 
-    def = this->add("min_print_speed", coFloat);
+    def = this->add("min_print_speed", coFloats);
     def->label = "Min print speed";
     def->tooltip = "Slic3r will not scale speed down below this speed.";
     def->sidetext = "mm/s";
-    def->cli = "min-print-speed=f";
+    def->cli = "min-print-speed=f@";
     def->min = 0;
-    def->default_value = new ConfigOptionFloat(10);
+    {
+        ConfigOptionFloats* opt = new ConfigOptionFloats();
+        opt->values.push_back(10.);
+        def->default_value = opt;
+    }
 
     def = this->add("min_skirt_length", coFloat);
     def->label = "Minimum extrusion length";
@@ -1151,15 +1200,19 @@ PrintConfigDef::PrintConfigDef()
     def->min = 0;
     def->default_value = new ConfigOptionInt(1);
     
-    def = this->add("slowdown_below_layer_time", coInt);
+    def = this->add("slowdown_below_layer_time", coInts);
     def->label = "Slow down if layer print time is below";
     def->tooltip = "If layer print time is estimated below this number of seconds, print moves speed will be scaled down to extend duration to this value.";
     def->sidetext = "approximate seconds";
-    def->cli = "slowdown-below-layer-time=i";
+    def->cli = "slowdown-below-layer-time=i@";
     def->width = 60;
     def->min = 0;
     def->max = 1000;
-    def->default_value = new ConfigOptionInt(5);
+    {
+        ConfigOptionInts* opt = new ConfigOptionInts();
+        opt->values.push_back(5);
+        def->default_value = opt;
+    }
 
     def = this->add("small_perimeter_speed", coFloatOrPercent);
     def->label = "Small perimeters";
@@ -1285,15 +1338,15 @@ PrintConfigDef::PrintConfigDef()
     // Default is half the external perimeter width.
     def->default_value = new ConfigOptionFloatOrPercent(50, true);
 
-    def = this->add("support_material_angle", coInt);
+    def = this->add("support_material_angle", coFloat);
     def->label = "Pattern angle";
     def->category = "Support material";
     def->tooltip = "Use this setting to rotate the support material pattern on the horizontal plane.";
     def->sidetext = "°";
-    def->cli = "support-material-angle=i";
+    def->cli = "support-material-angle=f";
     def->min = 0;
     def->max = 359;
-    def->default_value = new ConfigOptionInt(0);
+    def->default_value = new ConfigOptionFloat(0);
 
     def = this->add("support_material_buildplate_only", coBool);
     def->label = "Support on build plate only";
@@ -1615,10 +1668,13 @@ DynamicPrintConfig::normalize() {
                 this->option("infill_extruder", true)->setInt(extruder);
             if (!this->has("perimeter_extruder"))
                 this->option("perimeter_extruder", true)->setInt(extruder);
-            if (!this->has("support_material_extruder"))
-                this->option("support_material_extruder", true)->setInt(extruder);
-            if (!this->has("support_material_interface_extruder"))
-                this->option("support_material_interface_extruder", true)->setInt(extruder);
+            // Don't propagate the current extruder to support.
+            // For non-soluble supports, the default "0" extruder means to use the active extruder,
+            // for soluble supports one certainly does not want to set the extruder to non-soluble.
+            // if (!this->has("support_material_extruder"))
+            //     this->option("support_material_extruder", true)->setInt(extruder);
+            // if (!this->has("support_material_interface_extruder"))
+            //     this->option("support_material_interface_extruder", true)->setInt(extruder);
         }
     }
     

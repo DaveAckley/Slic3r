@@ -92,11 +92,11 @@ sub new {
         if ($event->HasModifiers) {
             $event->Skip;
         } else {
-            if ($key == ord('U') || $key == WXK_RIGHT) {
+            if ($key == ord('U')) {
                 $slider_high->SetValue($slider_high->GetValue + 1);
                 $slider_low->SetValue($slider_high->GetValue) if ($event->ShiftDown());
                 $self->set_z_idx_high($slider_high->GetValue);
-            } elsif ($key == ord('D') || $key == WXK_LEFT) {
+            } elsif ($key == ord('D')) {
                 $slider_high->SetValue($slider_high->GetValue - 1);
                 $slider_low->SetValue($slider_high->GetValue) if ($event->ShiftDown());
                 $self->set_z_idx_high($slider_high->GetValue);
@@ -107,6 +107,34 @@ sub new {
                     $slider_low->SetValue($slider_high->GetValue);
                     $self->set_z_idx_high($slider_high->GetValue);
                 }
+            } else {
+                $event->Skip;
+            }
+        }
+    });
+    EVT_KEY_DOWN($slider_low, sub {
+        my ($s, $event) = @_;
+        my $key = $event->GetKeyCode;
+        if ($event->HasModifiers) {
+            $event->Skip;
+        } else {
+            if ($key == WXK_LEFT) {
+            } elsif ($key == WXK_RIGHT) {
+                $slider_high->SetFocus;
+            } else {
+                $event->Skip;
+            }
+        }
+    });
+    EVT_KEY_DOWN($slider_high, sub {
+        my ($s, $event) = @_;
+        my $key = $event->GetKeyCode;
+        if ($event->HasModifiers) {
+            $event->Skip;
+        } else {
+            if ($key == WXK_LEFT) {
+                $slider_low->SetFocus;
+            } elsif ($key == WXK_RIGHT) {
             } else {
                 $event->Skip;
             }
@@ -223,8 +251,8 @@ sub load_print {
         my @filament_colors = @{$self->{config}->filament_colour};
         for (my $i = 0; $i <= $#extruder_colors; $i += 1) {
             my $color = $extruder_colors[$i];
-            $color = $filament_colors[$i] if ($color !~ m/^#[[:xdigit:]]{6}/);
-            $color = '#FFFFFF' if ($color !~ m/^#[[:xdigit:]]{6}/);
+            $color = $filament_colors[$i] if (! defined($color) || $color !~ m/^#[[:xdigit:]]{6}/);
+            $color = '#FFFFFF' if (! defined($color) || $color !~ m/^#[[:xdigit:]]{6}/);
             push @colors, $color;
         }
     }

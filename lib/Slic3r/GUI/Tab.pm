@@ -32,22 +32,16 @@ sub new {
     my ($parent, %params) = @_;
     my $self = $class->SUPER::new($parent, -1, wxDefaultPosition, wxDefaultSize, wxBK_LEFT | wxTAB_TRAVERSAL);
     
-    # horizontal sizer
-    $self->{sizer} = Wx::BoxSizer->new(wxHORIZONTAL);
+    # Vertical sizer to hold the choice menu and the rest of the page.
+    $self->{sizer} = Wx::BoxSizer->new(wxVERTICAL);
     $self->{sizer}->SetSizeHints($self);
     $self->SetSizer($self->{sizer});
     
-    # left vertical sizer
-    my $left_sizer = Wx::BoxSizer->new(wxVERTICAL);
-    $self->{sizer}->Add($left_sizer, 0, wxEXPAND | wxLEFT | wxTOP | wxBOTTOM, 3);
-    
-    my $left_col_width = 150;
-
     # preset chooser
     {
         
         # choice menu
-        $self->{presets_choice} = Wx::Choice->new($self, -1, wxDefaultPosition, [$left_col_width, -1], []);
+        $self->{presets_choice} = Wx::Choice->new($self, -1, wxDefaultPosition, [270, -1], []);
         $self->{presets_choice}->SetFont($Slic3r::GUI::small_font);
         
         # buttons
@@ -59,20 +53,23 @@ sub new {
         $self->{btn_delete_preset}->SetToolTipString("Delete this preset");
         $self->{btn_delete_preset}->Disable;
         
-        ### These cause GTK warnings:
-        ###my $box = Wx::StaticBox->new($self, -1, "Presets:", wxDefaultPosition, [$left_col_width, 50]);
-        ###my $hsizer = Wx::StaticBoxSizer->new($box, wxHORIZONTAL);
-        
-        my $hsizer = Wx::BoxSizer->new(wxHORIZONTAL);
-        
-        $left_sizer->Add($hsizer, 0, wxEXPAND | wxBOTTOM, 5);
-        $hsizer->Add($self->{presets_choice}, 1, wxRIGHT | wxALIGN_CENTER_VERTICAL, 3);
+        my $hsizer = Wx::BoxSizer->new(wxHORIZONTAL);        
+        $self->{sizer}->Add($hsizer, 0, wxBOTTOM, 3);
+        $hsizer->Add($self->{presets_choice}, 1, wxLEFT | wxRIGHT | wxTOP | wxALIGN_CENTER_VERTICAL, 3);
         $hsizer->Add($self->{btn_save_preset}, 0, wxALIGN_CENTER_VERTICAL);
         $hsizer->Add($self->{btn_delete_preset}, 0, wxALIGN_CENTER_VERTICAL);
     }
+
+    # Horizontal sizer to hold the tree and the selected page.
+    $self->{hsizer} = Wx::BoxSizer->new(wxHORIZONTAL);
+    $self->{sizer}->Add($self->{hsizer}, 1, wxEXPAND, 0);
+    
+    # left vertical sizer
+    my $left_sizer = Wx::BoxSizer->new(wxVERTICAL);
+    $self->{hsizer}->Add($left_sizer, 0, wxEXPAND | wxLEFT | wxTOP | wxBOTTOM, 3);
     
     # tree
-    $self->{treectrl} = Wx::TreeCtrl->new($self, -1, wxDefaultPosition, [$left_col_width, -1], wxTR_NO_BUTTONS | wxTR_HIDE_ROOT | wxTR_SINGLE | wxTR_NO_LINES | wxBORDER_SUNKEN | wxWANTS_CHARS);
+    $self->{treectrl} = Wx::TreeCtrl->new($self, -1, wxDefaultPosition, [185, -1], wxTR_NO_BUTTONS | wxTR_HIDE_ROOT | wxTR_SINGLE | wxTR_NO_LINES | wxBORDER_SUNKEN | wxWANTS_CHARS);
     $left_sizer->Add($self->{treectrl}, 1, wxEXPAND);
     $self->{icons} = Wx::ImageList->new(16, 16, 1);
     $self->{treectrl}->AssignImageList($self->{icons});
@@ -87,7 +84,7 @@ sub new {
             or return;
         $_->Hide for @{$self->{pages}};
         $page->Show;
-        $self->{sizer}->Layout;
+        $self->{hsizer}->Layout;
         $self->Refresh;
     });
     EVT_KEY_DOWN($self->{treectrl}, sub {
@@ -179,7 +176,7 @@ sub save_preset {
     if (!defined $name) {
         my $preset = $self->get_current_preset;
         my $default_name = $preset->default ? 'Untitled' : $preset->name;
-        $default_name =~ s/\.ini$//i;
+        $default_name =~ s/\.[iI][nN][iI]$//;
     
         my $dlg = Slic3r::GUI::SavePresetWindow->new($self,
             title   => lc($self->title),
@@ -351,7 +348,7 @@ sub add_options_page {
     
     my $page = Slic3r::GUI::Tab::Page->new($self, $title, $self->{iconcount});
     $page->Hide;
-    $self->{sizer}->Add($page, 1, wxEXPAND | wxLEFT, 5);
+    $self->{hsizer}->Add($page, 1, wxEXPAND | wxLEFT, 5);
     push @{$self->{pages}}, $page;
     return $page;
 }
@@ -566,7 +563,7 @@ sub build {
         external_perimeter_extrusion_width infill_extrusion_width solid_infill_extrusion_width 
         top_infill_extrusion_width support_material_extrusion_width
         infill_overlap bridge_flow_ratio
-        clip_multipart_objects xy_size_compensation threads resolution
+        clip_multipart_objects elefant_foot_compensation xy_size_compensation threads resolution
         wipe_tower wipe_tower_x wipe_tower_y wipe_tower_width wipe_tower_per_color_wipe
     ));
     $self->{config}->set('print_settings_id', '');
@@ -770,6 +767,7 @@ sub build {
         {
             my $optgroup = $page->new_optgroup('Other');
             $optgroup->append_single_option_line('clip_multipart_objects');
+            $optgroup->append_single_option_line('elefant_foot_compensation');
             $optgroup->append_single_option_line('xy_size_compensation');
             $optgroup->append_single_option_line('threads') if $Slic3r::have_threads;
             $optgroup->append_single_option_line('resolution');
@@ -1078,8 +1076,8 @@ sub build {
                 my $line = Slic3r::GUI::OptionsGroup::Line->new(
                     label => 'Bed',
                 );
-                $line->append_option($optgroup->get_option('first_layer_bed_temperature'));
-                $line->append_option($optgroup->get_option('bed_temperature'));
+                $line->append_option($optgroup->get_option('first_layer_bed_temperature', 0));
+                $line->append_option($optgroup->get_option('bed_temperature', 0));
                 $optgroup->append_line($line);
             }
         }
@@ -1089,8 +1087,8 @@ sub build {
         my $page = $self->add_options_page('Cooling', 'hourglass.png');
         {
             my $optgroup = $page->new_optgroup('Enable');
-            $optgroup->append_single_option_line('fan_always_on');
-            $optgroup->append_single_option_line('cooling');
+            $optgroup->append_single_option_line('fan_always_on', 0);
+            $optgroup->append_single_option_line('cooling', 0);
             
             my $line = Slic3r::GUI::OptionsGroup::Line->new(
                 label       => '',
@@ -1109,21 +1107,21 @@ sub build {
                 my $line = Slic3r::GUI::OptionsGroup::Line->new(
                     label => 'Fan speed',
                 );
-                $line->append_option($optgroup->get_option('min_fan_speed'));
-                $line->append_option($optgroup->get_option('max_fan_speed'));
+                $line->append_option($optgroup->get_option('min_fan_speed', 0));
+                $line->append_option($optgroup->get_option('max_fan_speed', 0));
                 $optgroup->append_line($line);
             }
             
-            $optgroup->append_single_option_line('bridge_fan_speed');
-            $optgroup->append_single_option_line('disable_fan_first_layers');
+            $optgroup->append_single_option_line('bridge_fan_speed', 0);
+            $optgroup->append_single_option_line('disable_fan_first_layers', 0);
         }
         {
             my $optgroup = $page->new_optgroup('Cooling thresholds',
                 label_width => 250,
             );
-            $optgroup->append_single_option_line('fan_below_layer_time');
-            $optgroup->append_single_option_line('slowdown_below_layer_time');
-            $optgroup->append_single_option_line('min_print_speed');
+            $optgroup->append_single_option_line('fan_below_layer_time', 0);
+            $optgroup->append_single_option_line('slowdown_below_layer_time', 0);
+            $optgroup->append_single_option_line('min_print_speed', 0);
         }
     }
 
@@ -1182,10 +1180,11 @@ sub _update {
     
     $self->_update_description;
     
-    my $cooling = $self->{config}->cooling;
-    $self->get_field($_)->toggle($cooling)
+    my $cooling = $self->{config}->cooling->[0];
+    my $fan_always_on = $cooling || $self->{config}->fan_always_on->[0];
+    $self->get_field($_, 0)->toggle($cooling)
         for qw(max_fan_speed fan_below_layer_time slowdown_below_layer_time min_print_speed);
-    $self->get_field($_)->toggle($cooling || $self->{config}->fan_always_on)
+    $self->get_field($_, 0)->toggle($fan_always_on)
         for qw(min_fan_speed disable_fan_first_layers);
 }
 
@@ -1195,21 +1194,21 @@ sub _update_description {
     my $config = $self->config;
     
     my $msg = "";
-    my $fan_other_layers = $config->fan_always_on
-        ? sprintf "will always run at %d%%%s.", $config->min_fan_speed,
-                ($config->disable_fan_first_layers > 1
-                    ? " except for the first " . $config->disable_fan_first_layers . " layers"
-                    : $config->disable_fan_first_layers == 1
+    my $fan_other_layers = $config->fan_always_on->[0]
+        ? sprintf "will always run at %d%%%s.", $config->min_fan_speed->[0],
+                ($config->disable_fan_first_layers->[0] > 1
+                    ? " except for the first " . $config->disable_fan_first_layers->[0] . " layers"
+                    : $config->disable_fan_first_layers->[0] == 1
                         ? " except for the first layer"
                         : "")
         : "will be turned off.";
     
-    if ($config->cooling) {
+    if ($config->cooling->[0]) {
         $msg = sprintf "If estimated layer time is below ~%ds, fan will run at %d%% and print speed will be reduced so that no less than %ds are spent on that layer (however, speed will never be reduced below %dmm/s).",
-            $config->slowdown_below_layer_time, $config->max_fan_speed, $config->slowdown_below_layer_time, $config->min_print_speed;
-        if ($config->fan_below_layer_time > $config->slowdown_below_layer_time) {
+            $config->slowdown_below_layer_time->[0], $config->max_fan_speed->[0], $config->slowdown_below_layer_time->[0], $config->min_print_speed->[0];
+        if ($config->fan_below_layer_time->[0] > $config->slowdown_below_layer_time->[0]) {
             $msg .= sprintf "\nIf estimated layer time is greater, but still below ~%ds, fan will run at a proportionally decreasing speed between %d%% and %d%%.",
-                $config->fan_below_layer_time, $config->max_fan_speed, $config->min_fan_speed;
+                $config->fan_below_layer_time->[0], $config->max_fan_speed->[0], $config->min_fan_speed->[0];
         }
         $msg .= "\nDuring the other layers, fan $fan_other_layers"
     } else {
@@ -1829,7 +1828,7 @@ sub accept {
     my ($self, $event) = @_;
 
     if (($self->{chosen_name} = $self->{combo}->GetValue)) {
-        if ($self->{chosen_name} !~ /^[^<>:\/\\|?*\"]+$/i) {
+        if ($self->{chosen_name} !~ /^[^<>:\/\\|?*\"]+$/) {
             Slic3r::GUI::show_error($self, "The supplied name is not valid; the following characters are not allowed: <>:/\|?*\"");
         } elsif ($self->{chosen_name} eq '- default -') {
             Slic3r::GUI::show_error($self, "The supplied name is not available.");

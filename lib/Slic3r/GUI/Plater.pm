@@ -7,7 +7,7 @@ use utf8;
 
 use File::Basename qw(basename dirname);
 use List::Util qw(sum first max);
-use Slic3r::Geometry qw(X Y Z MIN MAX scale unscale deg2rad rad2deg);
+use Slic3r::Geometry qw(X Y Z scale unscale deg2rad rad2deg);
 use LWP::UserAgent;
 use threads::shared qw(shared_clone);
 use Wx qw(:button :colour :cursor :dialog :filedialog :keycode :icon :font :id :listctrl :misc 
@@ -105,6 +105,12 @@ sub new {
         $self->{canvas3D}->set_on_select_object($on_select_object);
         $self->{canvas3D}->set_on_double_click($on_double_click);
         $self->{canvas3D}->set_on_right_click(sub { $on_right_click->($self->{canvas3D}, @_); });
+        $self->{canvas3D}->set_on_rotate_object_left(sub { $self->rotate(-45, Z, 'relative') });
+        $self->{canvas3D}->set_on_rotate_object_right(sub { $self->rotate( 45, Z, 'relative') });
+        $self->{canvas3D}->set_on_scale_object_uniformly(sub { $self->changescale(undef) });
+        $self->{canvas3D}->set_on_increase_objects(sub { $self->increase() });
+        $self->{canvas3D}->set_on_decrease_objects(sub { $self->decrease() });
+        $self->{canvas3D}->set_on_remove_object(sub { $self->remove() });
         $self->{canvas3D}->set_on_instances_moved($on_instances_moved);
         $self->{canvas3D}->set_on_wipe_tower_moved(sub {
             my ($new_pos_3f) = @_;
@@ -690,44 +696,75 @@ sub filament_presets {
 
 sub add {
     my $self = shift;
-    
     my @input_files = wxTheApp->open_model($self);
-    $self->load_file($_) for @input_files;
+    $self->load_files(\@input_files);
 }
 
-sub load_file {
-    my $self = shift;
-    my ($input_file) = @_;
-    
-    $Slic3r::GUI::Settings->{recent}{skein_directory} = dirname($input_file);
-    wxTheApp->save_settings;
-    
-    my $process_dialog = Wx::ProgressDialog->new('Loading…', "Processing input file…", 100, $self, 0);
+sub load_files {
+    my ($self, $input_files) = @_;
+
+    return if ! defined($input_files) || ! scalar(@$input_files);
+
+    my $nozzle_dmrs = $self->{config}->get('nozzle_diameter');
+    # One of the files is potentionally a bundle of files. Don't bundle them, but load them one by one.
+    # Only bundle .stls or .objs if the printer has multiple extruders.
+    my $one_by_one = (@$nozzle_dmrs <= 1) || (@$input_files == 1) || 
+        defined(first { $_ =~ /.[aA][mM][fF]$/ || $_ =~ /.3[mM][fF]$/ || $_ =~ /.[pP][rR][uI][sS][aA]$/ } @$input_files);
+        
+    my $process_dialog = Wx::ProgressDialog->new('Loading…', "Processing input file\n" . basename($input_files->[0]), 100, $self, 0);
     $process_dialog->Pulse;
-    
     local $SIG{__WARN__} = Slic3r::GUI::warning_catcher($self);
-    
-    my $model = eval { Slic3r::Model->read_from_file($input_file, 0) };
-    Slic3r::GUI::show_error($self, $@) if $@;
-    
+
+    # new_model to collect volumes, if all of them come from .stl or .obj and there is a chance, that they will be
+    # possibly merged into a single multi-part object.
+    my $new_model = $one_by_one ? undef : Slic3r::Model->new;
+    # Object indices for the UI.
     my @obj_idx = ();
-    if (defined $model) {
+    # Collected file names to display the final message on the status bar.
+    my @loaded_files = ();
+    # For all input files.
+    for (my $i = 0; $i < @$input_files; $i += 1) {
+        my $input_file = $input_files->[$i];
+        $process_dialog->Update(100. * $i / @$input_files, "Processing input file\n" . basename($input_file));
+
+        my $model = eval { Slic3r::Model->read_from_file($input_file, 0) };
+        Slic3r::GUI::show_error($self, $@) if $@;
+
+        next if ! defined $model;
+        
         if ($model->looks_like_multipart_object) {
             my $dialog = Wx::MessageDialog->new($self,
                 "This file contains several objects positioned at multiple heights. "
                 . "Instead of considering them as multiple objects, should I consider\n"
                 . "this file as a single object having multiple parts?\n",
                 'Multi-part object detected', wxICON_WARNING | wxYES | wxNO);
-            if ($dialog->ShowModal() == wxID_YES) {
-                $model->convert_multipart_object;
-            }
+            $model->convert_multipart_object if $dialog->ShowModal() == wxID_YES;
         }
-        @obj_idx = $self->load_model_objects(@{$model->objects});
-        $self->statusbar->SetStatusText("Loaded " . basename($input_file));
+        
+        if ($one_by_one) {
+            push @obj_idx, $self->load_model_objects(@{$model->objects});
+        } else {
+            # This must be an .stl or .obj file, which may contain a maximum of one volume.
+            $new_model->add_object($_) for (@{$model->objects});
+        }
     }
+
+    if ($new_model) {
+        my $dialog = Wx::MessageDialog->new($self,
+            "Multiple objects were loaded for a multi-material printer.\n"
+            . "Instead of considering them as multiple objects, should I consider\n"
+            . "these files to represent a single object having multiple parts?\n",
+            'Multi-part object detected', wxICON_WARNING | wxYES | wxNO);
+        $new_model->convert_multipart_object if $dialog->ShowModal() == wxID_YES;
+        push @obj_idx, $self->load_model_objects(@{$new_model->objects});
+    }
+
+    # Note the current directory for the file open dialog.
+    $Slic3r::GUI::Settings->{recent}{skein_directory} = dirname($input_files->[-1]);
+    wxTheApp->save_settings;
     
     $process_dialog->Destroy;
-    
+    $self->statusbar->SetStatusText("Loaded " . join(',', @loaded_files));
     return @obj_idx;
 }
 
@@ -831,8 +868,9 @@ sub remove {
     $self->{preview3D}->enabled(0) if $self->{preview3D};
     
     # if no object index is supplied, remove the selected one
-    if (!defined $obj_idx) {
+    if (! defined $obj_idx) {
         ($obj_idx, undef) = $self->selected_object;
+        return if ! defined $obj_idx;
     }
     
     splice @{$self->{objects}}, $obj_idx, 1;
@@ -1090,12 +1128,12 @@ sub changescale {
         if ($tosize) {
             my $cursize = max(@$object_size);
             my $newsize = $self->_get_number_from_user('Enter the new max size for the selected object:', 'Scale', 'Invalid scaling value entered', $cursize, 1);
-            return if $newsize eq '';
+            return if ! defined($newsize) || $newsize eq '';
             $scale = $model_instance->scaling_factor * $newsize / $cursize * 100;
         } else {
             # max scale factor should be above 2540 to allow importing files exported in inches
             $scale = $self->_get_number_from_user('Enter the scale % for the selected object:', 'Scale', 'Invalid scaling value entered', $model_instance->scaling_factor*100, 1);
-            return if $scale eq '';
+            return if ! defined($scale) || $scale eq '';
         }
     
         $self->{list}->SetItem($obj_idx, 2, "$scale%");
@@ -1159,17 +1197,8 @@ sub split_object {
         return;
     }
     
-    foreach my $object (@model_objects) {
-        $object->instances->[$_]->offset->translate($_ * 10, $_ * 10)
-            for 1..$#{ $object->instances };
-        
-        # we need to center this single object around origin
-        $object->center_around_origin;
-    }
+    $_->center_around_origin for (@model_objects);
 
-    # remove the original object before spawning the object_loaded event, otherwise 
-    # we'll pass the wrong $obj_idx to it (which won't be recognized after the
-    # thumbnail thread returns)
     $self->remove($obj_idx);
     $current_object = $obj_idx = undef;
     
@@ -1588,7 +1617,7 @@ sub reload_from_disk {
     return if !$model_object->input_file
         || !-e $model_object->input_file;
     
-    my @new_obj_idx = $self->load_file($model_object->input_file);
+    my @new_obj_idx = $self->load_files([$model_object->input_file]);
     return if !@new_obj_idx;
     
     foreach my $new_obj_idx (@new_obj_idx) {
@@ -1638,7 +1667,7 @@ sub _get_export_file {
     my $output_file = $main::opt{output};
     {
         $output_file = $self->{print}->output_filepath($output_file);
-        $output_file =~ s/\.gcode$/$suffix/i;
+        $output_file =~ s/\.[gG][cC][oO][dD][eE]$/$suffix/;
         my $dlg = Wx::FileDialog->new($self, "Save $format file as:", dirname($output_file),
             basename($output_file), &Slic3r::GUI::MODEL_WILDCARD, wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
         if ($dlg->ShowModal != wxID_OK) {
@@ -2038,23 +2067,23 @@ sub object_menu {
     
     my $frame = $self->GetFrame;
     my $menu = Wx::Menu->new;
-    $frame->_append_menu_item($menu, "Delete\tCtrl+Del", 'Remove the selected object', sub {
+    $frame->_append_menu_item($menu, "Delete\t\xA0Del", 'Remove the selected object', sub {
         $self->remove;
     }, undef, 'brick_delete.png');
-    $frame->_append_menu_item($menu, "Increase copies\tCtrl++", 'Place one more copy of the selected object', sub {
+    $frame->_append_menu_item($menu, "Increase copies\t\xA0+", 'Place one more copy of the selected object', sub {
         $self->increase;
     }, undef, 'add.png');
-    $frame->_append_menu_item($menu, "Decrease copies\tCtrl+-", 'Remove one copy of the selected object', sub {
+    $frame->_append_menu_item($menu, "Decrease copies\t\xA0-", 'Remove one copy of the selected object', sub {
         $self->decrease;
     }, undef, 'delete.png');
     $frame->_append_menu_item($menu, "Set number of copies…", 'Change the number of copies of the selected object', sub {
         $self->set_number_of_copies;
     }, undef, 'textfield.png');
     $menu->AppendSeparator();
-    $frame->_append_menu_item($menu, "Rotate 45° clockwise", 'Rotate the selected object by 45° clockwise', sub {
+    $frame->_append_menu_item($menu, "Rotate 45° clockwise\t\xA0l", 'Rotate the selected object by 45° clockwise', sub {
         $self->rotate(-45, Z, 'relative');
     }, undef, 'arrow_rotate_clockwise.png');
-    $frame->_append_menu_item($menu, "Rotate 45° counter-clockwise", 'Rotate the selected object by 45° counter-clockwise', sub {
+    $frame->_append_menu_item($menu, "Rotate 45° counter-clockwise\t\xA0r", 'Rotate the selected object by 45° counter-clockwise', sub {
         $self->rotate(+45, Z, 'relative');
     }, undef, 'arrow_rotate_anticlockwise.png');
     
@@ -2087,7 +2116,7 @@ sub object_menu {
     my $scaleMenu = Wx::Menu->new;
     my $scaleMenuItem = $menu->AppendSubMenu($scaleMenu, "Scale", 'Scale the selected object along a single axis');
     $frame->_set_menu_item_icon($scaleMenuItem, 'arrow_out.png');
-    $frame->_append_menu_item($scaleMenu, "Uniformly…", 'Scale the selected object along the XYZ axes', sub {
+    $frame->_append_menu_item($scaleMenu, "Uniformly…\t\xA0s", 'Scale the selected object along the XYZ axes', sub {
         $self->changescale(undef);
     });
     $frame->_append_menu_item($scaleMenu, "Along X axis…", 'Scale the selected object along the X axis', sub {
@@ -2172,17 +2201,14 @@ sub OnDropFiles {
     @_ = ();
     
     # only accept STL, OBJ and AMF files
-    return 0 if grep !/\.(?:stl|obj|amf(?:\.xml)?|prusa)$/i, @$filenames;
+    return 0 if grep !/\.(?:[sS][tT][lL]|[oO][bB][jJ]|[aA][mM][fF](?:\.[xX][mM][lL])?|[pP][rR][uU][sS][aA])$/, @$filenames;
     
-    $self->{window}->load_file($_) for @$filenames;
+    $self->{window}->load_files($filenames);
 }
 
 # 2D preview of an object. Each object is previewed by its convex hull.
 package Slic3r::GUI::Plater::Object;
 use Moo;
-
-use List::Util qw(first);
-use Slic3r::Geometry qw(X Y Z MIN MAX deg2rad);
 
 has 'name'                  => (is => 'rw', required => 1);
 has 'thumbnail'             => (is => 'rw'); # ExPolygon::Collection in scaled model units with no transforms

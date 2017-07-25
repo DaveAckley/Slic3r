@@ -62,7 +62,6 @@ use Slic3r::ExtrusionLoop;
 use Slic3r::ExtrusionPath;
 use Slic3r::Flow;
 use Slic3r::GCode::Reader;
-use Slic3r::Geometry qw(PI);
 use Slic3r::Geometry::Clipper;
 use Slic3r::Layer;
 use Slic3r::Line;
@@ -144,7 +143,6 @@ sub thread_cleanup {
     *Slic3r::Config::Static::DESTROY        = sub {};
     *Slic3r::ExPolygon::DESTROY             = sub {};
     *Slic3r::ExPolygon::Collection::DESTROY = sub {};
-    *Slic3r::Extruder::DESTROY              = sub {};
     *Slic3r::ExtrusionLoop::DESTROY         = sub {};
     *Slic3r::ExtrusionMultiPath::DESTROY    = sub {};
     *Slic3r::ExtrusionPath::DESTROY         = sub {};
@@ -154,7 +152,6 @@ sub thread_cleanup {
     *Slic3r::GCode::DESTROY                 = sub {};
     *Slic3r::GCode::PlaceholderParser::DESTROY = sub {};
     *Slic3r::GCode::Sender::DESTROY         = sub {};
-    *Slic3r::GCode::Writer::DESTROY         = sub {};
     *Slic3r::Geometry::BoundingBox::DESTROY = sub {};
     *Slic3r::Geometry::BoundingBoxf::DESTROY = sub {};
     *Slic3r::Geometry::BoundingBoxf3::DESTROY = sub {};
@@ -236,8 +233,8 @@ sub decode_path {
     my ($path) = @_;
     
     $path = Encode::decode(locale_fs => $path)
-        unless utf8::is_utf8($path);
-    
+        unless Encode::is_utf8($path);
+
     # The filesystem might force a normalization form (like HFS+ does) so 
     # if we rely on the filename being comparable after the open() + readdir()
     # roundtrip (like when creating and then selecting a preset), we need to 

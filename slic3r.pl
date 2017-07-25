@@ -35,6 +35,7 @@ my %cli_options = ();
         'ignore-nonexistent-config' => \$opt{ignore_nonexistent_config},
         'no-controller'         => \$opt{no_controller},
         'no-plater'             => \$opt{no_plater},
+        'gui-mode=s'            => \$opt{obsolete_ignore_this_option_gui_mode},
         'datadir=s'             => \$opt{datadir},
         'export-svg'            => \$opt{export_svg},
         'merge|m'               => \$opt{merge},
@@ -110,10 +111,8 @@ if ((!@ARGV || $opt{gui}) && !$opt{save} && eval "require Slic3r::GUI; 1") {
     setlocale(LC_NUMERIC, 'C');
     $gui->{mainframe}->load_config_file($_) for @{$opt{load}};
     $gui->{mainframe}->load_config($cli_config);
-    foreach my $input_file (@ARGV) {
-        $input_file = Slic3r::decode_path($input_file);
-        $gui->{mainframe}{plater}->load_file($input_file) unless $opt{no_plater};
-    }
+    my @input_files = map Slic3r::decode_path($_), @ARGV;
+    $gui->{mainframe}{plater}->load_files(\@input_files) unless $opt{no_plater};
     $gui->MainLoop;
     exit;
 }
@@ -126,10 +125,10 @@ if (@ARGV) {  # slicing from command line
         foreach my $file (@ARGV) {
             $file = Slic3r::decode_path($file);
             die "Repair is currently supported only on STL files\n"
-                if $file !~ /\.stl$/i;
+                if $file !~ /\.[sS][tT][lL]$/;
             
             my $output_file = $file;
-            $output_file =~ s/\.(stl)$/_fixed.obj/i;
+            $output_file =~ s/\.([sS][tT][lL])$/_fixed.obj/;
             my $tmesh = Slic3r::TriangleMesh->new;
             $tmesh->ReadSTLFile($file);
             $tmesh->repair;
@@ -314,7 +313,7 @@ $j
     --temperature       Extrusion temperature in degree Celsius, set 0 to disable (default: $config->{temperature}->[0])
     --first-layer-temperature Extrusion temperature for the first layer, in degree Celsius,
                         set 0 to disable (default: same as --temperature)
-    --bed-temperature   Heated bed temperature in degree Celsius, set 0 to disable (default: $config->{bed_temperature})
+    --bed-temperature   Heated bed temperature in degree Celsius, set 0 to disable (default: $config->{bed_temperature}[0])
     --first-layer-bed-temperature Heated bed temperature for the first layer, in degree Celsius,
                         set 0 to disable (default: same as --bed-temperature)
     
@@ -463,15 +462,15 @@ $j
    
    Cooling options:
     --cooling           Enable fan and cooling control
-    --min-fan-speed     Minimum fan speed (default: $config->{min_fan_speed}%)
-    --max-fan-speed     Maximum fan speed (default: $config->{max_fan_speed}%)
-    --bridge-fan-speed  Fan speed to use when bridging (default: $config->{bridge_fan_speed}%)
+    --min-fan-speed     Minimum fan speed (default: $config->{min_fan_speed}[0]%)
+    --max-fan-speed     Maximum fan speed (default: $config->{max_fan_speed}[0]%)
+    --bridge-fan-speed  Fan speed to use when bridging (default: $config->{bridge_fan_speed}[0]%)
     --fan-below-layer-time Enable fan if layer print time is below this approximate number 
-                        of seconds (default: $config->{fan_below_layer_time})
+                        of seconds (default: $config->{fan_below_layer_time}[0])
     --slowdown-below-layer-time Slow down if layer print time is below this approximate number
-                        of seconds (default: $config->{slowdown_below_layer_time})
-    --min-print-speed   Minimum print speed (mm/s, default: $config->{min_print_speed})
-    --disable-fan-first-layers Disable fan for the first N layers (default: $config->{disable_fan_first_layers})
+                        of seconds (default: $config->{slowdown_below_layer_time}[0])
+    --min-print-speed   Minimum print speed (mm/s, default: $config->{min_print_speed}[0])
+    --disable-fan-first-layers Disable fan for the first N layers (default: $config->{disable_fan_first_layers}[0])
     --fan-always-on     Keep fan always on at min fan speed, even for layers that don't need
                         cooling
    
@@ -494,9 +493,13 @@ $j
     --dont-arrange      Don't arrange the objects on the build plate. The model coordinates
                         define the absolute positions on the build plate. 
                         The option --print-center will be ignored.
-    --clip_multipart_objects When printing multi-material objects, this settings will make slic3r to clip the overlapping 
+    --clip_multipart_objects 
+                        When printing multi-material objects, this settings will make slic3r to clip the overlapping 
                         object parts one by the other (2nd part will be clipped by the 1st, 3rd part will be clipped 
                         by the 1st and 2nd etc). (default: $config->{clip_multipart_objects})";
+    --elefant-foot-compensation
+                        Shrink the first layer by the configured value to compensate for the 1st layer squish 
+                        aka an Elefant Foot effect (mm, default: $config->{elefant_foot_compensation})
     --xy-size-compensation
                         Grow/shrink objects by the configured absolute distance (mm, default: $config->{xy_size_compensation})
    

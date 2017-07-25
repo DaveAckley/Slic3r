@@ -6,45 +6,53 @@
 #include "Extruder.hpp"
 #include "Point.hpp"
 #include "PrintConfig.hpp"
+#include "GCode/CoolingBuffer.hpp"
 
 namespace Slic3r {
 
 class GCodeWriter {
 public:
     GCodeConfig config;
-    std::set<Extruder> extruders;
     bool multiple_extruders;
     
     GCodeWriter() : 
-        multiple_extruders(false), _extrusion_axis("E"), _extruder(nullptr),
+        multiple_extruders(false), m_extrusion_axis("E"), m_extruder(nullptr),
         m_single_extruder_multi_material(false),
-        _last_acceleration(0), _last_fan_speed(0), _lifted(0)
+        m_last_acceleration(0), m_last_fan_speed(0), 
+        m_last_bed_temperature(0), m_last_bed_temperature_reached(true), 
+        m_lifted(0)
         {}
-    Extruder*   extruder() { return this->_extruder; }
-    const Extruder* extruder() const { return this->_extruder; }
-    std::string extrusion_axis() const { return this->_extrusion_axis; }
-    void        apply_print_config(const PrintConfig &print_config);
-    void        set_extruders(const std::vector<unsigned int> &extruder_ids);
+    Extruder*            extruder()             { return m_extruder; }
+    const Extruder*      extruder()     const   { return m_extruder; }
+
+    std::string          extrusion_axis() const { return m_extrusion_axis; }
+    void                 apply_print_config(const PrintConfig &print_config);
+    // Extruders are expected to be sorted in an increasing order.
+    void                 set_extruders(const std::vector<unsigned int> &extruder_ids);
+    const std::vector<Extruder>& extruders() const { return m_extruders; }
     std::vector<unsigned int> extruder_ids() const { 
         std::vector<unsigned int> out; 
-        out.reserve(extruders.size()); 
-        for (const auto e : extruders) 
-            out.push_back(e.id); 
+        out.reserve(m_extruders.size()); 
+        for (const Extruder &e : m_extruders) 
+            out.push_back(e.id()); 
         return out;
     }
     std::string preamble();
     std::string postamble() const;
     std::string set_temperature(unsigned int temperature, bool wait = false, int tool = -1) const;
-    std::string set_bed_temperature(unsigned int temperature, bool wait = false) const;
+    std::string set_bed_temperature(unsigned int temperature, bool wait = false);
     std::string set_fan(unsigned int speed, bool dont_save = false);
     std::string set_acceleration(unsigned int acceleration);
     std::string reset_e(bool force = false);
     std::string update_progress(unsigned int num, unsigned int tot, bool allow_100 = false) const;
     // return false if this extruder was already selected
     bool        need_toolchange(unsigned int extruder_id) const 
-        { return (this->_extruder == nullptr) || (this->_extruder->id != extruder_id); }
+        { return m_extruder == nullptr || m_extruder->id() != extruder_id; }
     std::string set_extruder(unsigned int extruder_id)
         { return this->need_toolchange(extruder_id) ? this->toolchange(extruder_id) : ""; }
+    // Prefix of the toolchange G-code line, to be used by the CoolingBuffer to separate sections of the G-code
+    // printed with the same extruder.
+    std::string toolchange_prefix() const;
     std::string toolchange(unsigned int extruder_id);
     std::string set_speed(double F, const std::string &comment = std::string(), const std::string &cooling_marker = std::string()) const;
     std::string travel_to_xy(const Pointf &point, const std::string &comment = std::string());
@@ -58,16 +66,19 @@ public:
     std::string unretract();
     std::string lift();
     std::string unlift();
-    Pointf3     get_position() const { return this->_pos; }
+    Pointf3     get_position() const { return m_pos; }
 
 private:
-    std::string     _extrusion_axis;
+    std::vector<Extruder>    m_extruders;
+    std::string     m_extrusion_axis;
     bool            m_single_extruder_multi_material;
-    Extruder*       _extruder;
-    unsigned int    _last_acceleration;
-    unsigned int    _last_fan_speed;
-    double          _lifted;
-    Pointf3         _pos;
+    Extruder*       m_extruder;
+    unsigned int    m_last_acceleration;
+    unsigned int    m_last_fan_speed;
+    unsigned int    m_last_bed_temperature;
+    bool            m_last_bed_temperature_reached;
+    double          m_lifted;
+    Pointf3         m_pos;
 
     std::string _travel_to_z(double z, const std::string &comment);
     std::string _retract(double length, double restart_extra, const std::string &comment);

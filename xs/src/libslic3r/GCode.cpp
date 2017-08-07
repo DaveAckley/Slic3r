@@ -13,6 +13,10 @@
 #include <boost/date_time/local_time/local_time.hpp>
 #include <boost/foreach.hpp>
 
+#include <boost/nowide/iostream.hpp>
+#include <boost/nowide/cstdio.hpp>
+#include <boost/nowide/cstdlib.hpp>
+
 #include "SVG.hpp"
 
 #if 0
@@ -306,7 +310,33 @@ std::vector<std::pair<coordf_t, std::vector<GCode::LayerToPrint>>> GCode::collec
     return layers_to_print;
 }
 
-bool GCode::do_export(FILE *file, Print &print)
+bool GCode::do_export(Print *print, const char *path)
+{
+    // Remove the old g-code if it exists.
+    boost::nowide::remove(path);
+
+    std::string path_tmp(path);
+    path_tmp += ".tmp";
+
+    FILE *file = boost::nowide::fopen(path_tmp.c_str(), "wb");
+    if (file == nullptr)
+        return false;
+
+    bool result = this->_do_export(*print, file);
+    fclose(file);
+
+    if (result && boost::nowide::rename(path_tmp.c_str(), path) != 0) {
+        boost::nowide::cerr << "Failed to remove the output G-code file from " << path_tmp << " to " << path
+            << ". Is " << path_tmp << " locked?" << std::endl;
+        result = false;
+    }
+
+    if (! result)
+        boost::nowide::remove(path_tmp.c_str());
+    return result;
+}
+
+bool GCode::_do_export(Print &print, FILE *file)
 {
     // How many times will be change_layer() called?
     // change_layer() in turn increments the progress bar status.
@@ -469,7 +499,7 @@ bool GCode::do_export(FILE *file, Print &print)
     m_cooling_buffer->set_current_extruder(initial_extruder_id);
 
     // Disable fan.
-    if (print.config.cooling.get_at(initial_extruder_id) && print.config.disable_fan_first_layers.get_at(initial_extruder_id))
+    if (! print.config.cooling.get_at(initial_extruder_id) || print.config.disable_fan_first_layers.get_at(initial_extruder_id))
         write(file, m_writer.set_fan(0, true));
     
     // Set bed temperature if the start G-code does not contain any bed temp control G-codes.
@@ -487,10 +517,12 @@ bool GCode::do_export(FILE *file, Print &print)
     this->_print_first_layer_extruder_temperatures(file, print, initial_extruder_id, false);
     // Let the start-up script prime the 1st printing tool.
     m_placeholder_parser.set("initial_tool", initial_extruder_id);
-    writeln(file, m_placeholder_parser.process(print.config.start_gcode.value));
+    m_placeholder_parser.set("initial_extruder", initial_extruder_id);
+    m_placeholder_parser.set("current_extruder", initial_extruder_id);
+    writeln(file, m_placeholder_parser.process(print.config.start_gcode.value, initial_extruder_id));
     // Process filament-specific gcode in extruder order.
     for (const std::string &start_gcode : print.config.start_filament_gcode.values)
-        writeln(file, m_placeholder_parser.process(start_gcode));
+        writeln(file, m_placeholder_parser.process(start_gcode, &start_gcode - &print.config.start_filament_gcode.values.front()));
     this->_print_first_layer_extruder_temperatures(file, print, initial_extruder_id, true);
     
     // Set other general things.
@@ -636,8 +668,8 @@ bool GCode::do_export(FILE *file, Print &print)
     write(file, m_writer.set_fan(false));
     // Process filament-specific gcode in extruder order.
     for (const std::string &end_gcode : print.config.end_filament_gcode.values)
-        writeln(file, m_placeholder_parser.process(end_gcode));
-    writeln(file, m_placeholder_parser.process(print.config.end_gcode));
+        writeln(file, m_placeholder_parser.process(end_gcode, &end_gcode - &print.config.end_filament_gcode.values.front()));
+    writeln(file, m_placeholder_parser.process(print.config.end_gcode, m_writer.extruder()->id()));
     write(file, m_writer.update_progress(m_layer_count, m_layer_count, true)); // 100%
     write(file, m_writer.postamble());
 
@@ -800,7 +832,7 @@ void GCode::process_layer(
         PlaceholderParser pp(m_placeholder_parser);
         pp.set("layer_num", m_layer_index + 1);
         pp.set("layer_z",   print_z);
-        gcode += pp.process(print.config.before_layer_gcode.value) + "\n";
+        gcode += pp.process(print.config.before_layer_gcode.value, m_writer.extruder()->id()) + "\n";
     }
     gcode += this->change_layer(print_z);  // this will increase m_layer_index
 	m_layer = &layer;
@@ -808,7 +840,7 @@ void GCode::process_layer(
         PlaceholderParser pp(m_placeholder_parser);
         pp.set("layer_num", m_layer_index);
         pp.set("layer_z",   print_z);
-        gcode += pp.process(print.config.layer_gcode.value) + "\n";
+        gcode += pp.process(print.config.layer_gcode.value, m_writer.extruder()->id()) + "\n";
     }
 
     if (! first_layer && ! m_second_layer_things_done) {
@@ -2004,7 +2036,7 @@ std::string GCode::set_extruder(unsigned int extruder_id)
         PlaceholderParser pp = m_placeholder_parser;
         pp.set("previous_extruder", m_writer.extruder()->id());
         pp.set("next_extruder",     extruder_id);
-        gcode += pp.process(m_config.toolchange_gcode.value) + '\n';
+        gcode += pp.process(m_config.toolchange_gcode.value, extruder_id) + '\n';
     }
     
     // if ooze prevention is enabled, park current extruder in the nearest

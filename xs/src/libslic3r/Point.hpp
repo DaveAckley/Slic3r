@@ -27,16 +27,15 @@ typedef std::vector<Pointf3> Pointf3s;
 
 class Point
 {
-    public:
+public:
+    typedef coord_t coord_type;
     coord_t x;
     coord_t y;
     Point(coord_t _x = 0, coord_t _y = 0): x(_x), y(_y) {};
     Point(int _x, int _y): x(_x), y(_y) {};
     Point(long long _x, long long _y): x(coord_t(_x)), y(coord_t(_y)) {};  // for Clipper
     Point(double x, double y);
-    static Point new_scale(coordf_t x, coordf_t y) {
-        return Point(scale_(x), scale_(y));
-    };
+    static Point new_scale(coordf_t x, coordf_t y) { return Point(coord_t(scale_(x)), coord_t(scale_(y))); }
 
     bool operator==(const Point& rhs) const { return this->x == rhs.x && this->y == rhs.y; }
     bool operator!=(const Point& rhs) const { return ! (*this == rhs); }
@@ -77,6 +76,8 @@ class Point
 inline Point operator+(const Point& point1, const Point& point2) { return Point(point1.x + point2.x, point1.y + point2.y); }
 inline Point operator-(const Point& point1, const Point& point2) { return Point(point1.x - point2.x, point1.y - point2.y); }
 inline Point operator*(double scalar, const Point& point2) { return Point(scalar * point2.x, scalar * point2.y); }
+inline int64_t cross(const Point &v1, const Point &v2) { return int64_t(v1.x) * int64_t(v2.y) - int64_t(v1.y) * int64_t(v2.x); }
+inline int64_t dot(const Point &v1, const Point &v2) { return int64_t(v1.x) * int64_t(v2.x) + int64_t(v1.y) * int64_t(v2.y); }
 
 // To be used by std::unordered_map, std::unordered_multimap and friends.
 struct PointHash {
@@ -179,9 +180,10 @@ private:
 
 class Point3 : public Point
 {
-    public:
+public:
     coord_t z;
     explicit Point3(coord_t _x = 0, coord_t _y = 0, coord_t _z = 0): Point(_x, _y), z(_z) {};
+    static Point3 new_scale(coordf_t x, coordf_t y, coordf_t z) { return Point3(coord_t(scale_(x)), coord_t(scale_(y)), coord_t(scale_(z))); }
 };
 
 std::ostream& operator<<(std::ostream &stm, const Pointf &pointf);
@@ -189,6 +191,7 @@ std::ostream& operator<<(std::ostream &stm, const Pointf &pointf);
 class Pointf
 {
 public:
+    typedef coordf_t coord_type;
     coordf_t x;
     coordf_t y;
     explicit Pointf(coordf_t _x = 0, coordf_t _y = 0): x(_x), y(_y) {};
@@ -238,6 +241,11 @@ class Pointf3 : public Pointf
     Pointf3 negative() const;
     Vectorf3 vector_to(const Pointf3 &point) const;
 };
+
+template<typename TO> inline TO convert_to(const Point &src) { return TO(typename TO::coord_type(src.x), typename TO::coord_type(src.y)); }
+template<typename TO> inline TO convert_to(const Pointf &src) { return TO(typename TO::coord_type(src.x), typename TO::coord_type(src.y)); }
+template<typename TO> inline TO convert_to(const Point3 &src) { return TO(typename TO::coord_type(src.x), typename TO::coord_type(src.y), typename TO::coord_type(src.z)); }
+template<typename TO> inline TO convert_to(const Pointf3 &src) { return TO(typename TO::coord_type(src.x), typename TO::coord_type(src.y), typename TO::coord_type(src.z)); }
 
 } // namespace Slic3r
 

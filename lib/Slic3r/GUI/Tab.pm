@@ -112,8 +112,9 @@ sub new {
         my $res = Wx::MessageDialog->new($self, "Are you sure you want to delete the selected preset?", 'Delete Preset', wxYES_NO | wxNO_DEFAULT | wxICON_QUESTION)->ShowModal;
         return unless $res == wxID_YES;
         # Delete the file.
-        my $path = Slic3r::encode_path($self->{presets}[$i]->file);
-        if (-e $path && ! unlink $path) {
+        my $path = $self->{presets}[$i]->file;
+        my $enc_path = Slic3r::encode_path($path);
+        if (-e $enc_path && ! unlink $enc_path) {
             # Cannot delete the file, therefore the item will not be removed from the selection.
             Slic3r::GUI::show_error($self, "Cannot delete file $path : $!");
             return;
@@ -255,7 +256,7 @@ sub select_preset {
 sub select_preset_by_name {
     my ($self, $name) = @_;
     
-    $name = Unicode::Normalize::NFC($name);
+    $name = Slic3r::normalize_utf8_nfc($name);
     $self->select_preset(first { $self->{presets}[$_]->name eq $name } 0 .. $#{$self->{presets}});
 }
 
@@ -532,7 +533,7 @@ sub build {
         seam_position external_perimeters_first
         fill_density fill_pattern external_fill_pattern
         infill_every_layers infill_only_where_needed
-        solid_infill_every_layers fill_angle solid_infill_below_area 
+        solid_infill_every_layers fill_angle bridge_angle solid_infill_below_area 
         only_retract_when_crossing_perimeters infill_first
         max_print_speed max_volumetric_speed 
         max_volumetric_extrusion_rate_slope_positive max_volumetric_extrusion_rate_slope_negative
@@ -622,6 +623,7 @@ sub build {
             $optgroup->append_single_option_line('solid_infill_every_layers');
             $optgroup->append_single_option_line('fill_angle');
             $optgroup->append_single_option_line('solid_infill_below_area');
+            $optgroup->append_single_option_line('bridge_angle');
             $optgroup->append_single_option_line('only_retract_when_crossing_perimeters');
             $optgroup->append_single_option_line('infill_first');
         }
@@ -977,7 +979,7 @@ sub _update {
             solid_infill_speed);
     
     $self->get_field($_)->toggle($have_infill || $have_solid_infill)
-        for qw(fill_angle infill_extrusion_width infill_speed bridge_speed);
+        for qw(fill_angle bridge_angle infill_extrusion_width infill_speed bridge_speed);
     
     $self->get_field('gap_fill_speed')->toggle($have_perimeters && $have_infill);
     
@@ -1250,9 +1252,7 @@ sub build {
         my $btn = Wx::Button->new($parent, -1, "Set…", wxDefaultPosition, wxDefaultSize,
             wxBU_LEFT | wxBU_EXACTFIT);
         $btn->SetFont($Slic3r::GUI::small_font);
-        if ($Slic3r::GUI::have_button_icons) {
-            $btn->SetBitmap(Wx::Bitmap->new($Slic3r::var->("cog.png"), wxBITMAP_TYPE_PNG));
-        }
+        $btn->SetBitmap(Wx::Bitmap->new($Slic3r::var->("cog.png"), wxBITMAP_TYPE_PNG));
         
         my $sizer = Wx::BoxSizer->new(wxHORIZONTAL);
         $sizer->Add($btn);
@@ -1333,9 +1333,7 @@ sub build {
                 my $btn = $self->{serial_test_btn} = Wx::Button->new($parent, -1,
                     "Test", wxDefaultPosition, wxDefaultSize, wxBU_LEFT | wxBU_EXACTFIT);
                 $btn->SetFont($Slic3r::GUI::small_font);
-                if ($Slic3r::GUI::have_button_icons) {
-                    $btn->SetBitmap(Wx::Bitmap->new($Slic3r::var->("wrench.png"), wxBITMAP_TYPE_PNG));
-                }
+                $btn->SetBitmap(Wx::Bitmap->new($Slic3r::var->("wrench.png"), wxBITMAP_TYPE_PNG));
                 
                 EVT_BUTTON($self, $btn, sub {
                     my $sender = Slic3r::GCode::Sender->new;
@@ -1365,9 +1363,7 @@ sub build {
                 
                 my $btn = Wx::Button->new($parent, -1, "Browse…", wxDefaultPosition, wxDefaultSize, wxBU_LEFT);
                 $btn->SetFont($Slic3r::GUI::small_font);
-                if ($Slic3r::GUI::have_button_icons) {
-                    $btn->SetBitmap(Wx::Bitmap->new($Slic3r::var->("zoom.png"), wxBITMAP_TYPE_PNG));
-                }
+                $btn->SetBitmap(Wx::Bitmap->new($Slic3r::var->("zoom.png"), wxBITMAP_TYPE_PNG));
                 
                 if (!eval "use Net::Bonjour; 1") {
                     $btn->Disable;
@@ -1403,9 +1399,7 @@ sub build {
                 my $btn = $self->{octoprint_host_test_btn} = Wx::Button->new($parent, -1,
                     "Test", wxDefaultPosition, wxDefaultSize, wxBU_LEFT | wxBU_EXACTFIT);
                 $btn->SetFont($Slic3r::GUI::small_font);
-                if ($Slic3r::GUI::have_button_icons) {
-                    $btn->SetBitmap(Wx::Bitmap->new($Slic3r::var->("wrench.png"), wxBITMAP_TYPE_PNG));
-                }
+                $btn->SetBitmap(Wx::Bitmap->new($Slic3r::var->("wrench.png"), wxBITMAP_TYPE_PNG));
                 
                 EVT_BUTTON($self, $btn, sub {
                     my $ua = LWP::UserAgent->new;

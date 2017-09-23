@@ -903,9 +903,9 @@ sub reset {
 
 sub increase {
     my ($self, $copies) = @_;
-    
     $copies //= 1;
     my ($obj_idx, $object) = $self->selected_object;
+    return if ! defined $obj_idx;
     my $model_object = $self->{model}->objects->[$obj_idx];
     my $instance = $model_object->instances->[-1];
     for my $i (1..$copies) {
@@ -930,11 +930,12 @@ sub increase {
 
 sub decrease {
     my ($self, $copies_asked) = @_;
-    
     my $copies = $copies_asked // 1;
+    my ($obj_idx, $object) = $self->selected_object;
+    return if ! defined $obj_idx;
+
     $self->stop_background_process;
     
-    my ($obj_idx, $object) = $self->selected_object;
     my $model_object = $self->{model}->objects->[$obj_idx];
     if ($model_object->instances_count > $copies) {
         for my $i (1..$copies) {
@@ -1982,7 +1983,8 @@ sub selection_changed {
     if ($self->{object_info_size}) { # have we already loaded the info pane?
         if ($have_sel) {
             my $model_object = $self->{model}->objects->[$obj_idx];
-            $model_object->print_info;
+            #FIXME print_info runs model fixing in two rounds, it is very slow, it should not be performed here!
+            # $model_object->print_info;
             my $model_instance = $model_object->instances->[0];
             $self->{object_info_size}->SetLabel(sprintf("%.2f x %.2f x %.2f", @{$model_object->instance_bounding_box(0)->size}));
             $self->{object_info_materials}->SetLabel($model_object->materials_count);

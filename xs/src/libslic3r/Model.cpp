@@ -49,8 +49,10 @@ Model Model::read_from_file(const std::string &input_file, bool add_default_inst
     else if (boost::algorithm::iends_with(input_file, ".amf") ||
                boost::algorithm::iends_with(input_file, ".amf.xml"))
         result = load_amf(input_file.c_str(), &model);
+#ifdef SLIC3R_PRUS
     else if (boost::algorithm::iends_with(input_file, ".prusa"))
         result = load_prus(input_file.c_str(), &model);
+#endif /* SLIC3R_PRUS */
     else
         throw std::runtime_error("Unknown file format. Input file must have .stl, .obj, .amf(.xml) or .prusa extension.");
     
@@ -339,7 +341,7 @@ void Model::convert_multipart_object()
     if (this->objects.empty())
         return;
     
-    ModelObject* object = this->add_object();
+    ModelObject* object = new ModelObject(this);
     object->input_file = this->objects.front()->input_file;
     
     for (const ModelObject* o : this->objects)
@@ -349,8 +351,8 @@ void Model::convert_multipart_object()
     for (const ModelInstance* i : this->objects.front()->instances)
         object->add_instance(*i);
     
-    while (this->objects.size() > 1)
-        this->delete_object(0);
+    this->clear_objects();
+    this->objects.push_back(object);
 }
 
 ModelObject::ModelObject(Model *model, const ModelObject &other, bool copy_volumes) :  

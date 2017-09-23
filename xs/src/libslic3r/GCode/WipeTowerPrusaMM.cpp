@@ -6,7 +6,7 @@
 #include <iostream>
 #include <vector>
 
-#ifdef __linux
+#if defined(__linux) || defined(__GNUC__ )
 #include <strings.h>
 #endif /* __linux */
 
@@ -315,6 +315,29 @@ private:
 	Writer& operator=(const Writer &rhs);
 };
 
+/*
+class Material
+{
+public:
+	std::string 				name;
+	std::string 				type;
+
+	struct RammingStep {
+//		float length;
+		float extrusion_multiplier; // sirka linky
+		float extrusion;
+		float speed;
+	};
+	std::vector<RammingStep> 			ramming_sequence;
+
+	// Number and speed of the cooling moves.
+	std::vector<float>					cooling_moves;
+
+	// Percentage of the speed overide, in pairs of <z, percentage>
+	std::vector<std::pair<float, int>> 	speed_override;
+};
+*/
+
 } // namespace PrusaMultiMaterial
 
 WipeTowerPrusaMM::material_type WipeTowerPrusaMM::parse_material(const char *name)
@@ -340,11 +363,121 @@ WipeTowerPrusaMM::material_type WipeTowerPrusaMM::parse_material(const char *nam
 	return INVALID;
 }
 
-WipeTower::ToolChangeResult WipeTowerPrusaMM::tool_change(int tool, bool last_in_layer, Purpose purpose)
+// Returns gcode to prime the nozzles at the front edge of the print bed.
+WipeTower::ToolChangeResult WipeTowerPrusaMM::prime(
+	// print_z of the first layer.
+	float 						first_layer_height, 
+	// Extruder indices, in the order to be primed. The last extruder will later print the wipe tower brim, print brim and the object.
+	std::vector<unsigned int> 	tools,
+	// If true, the last priming are will be the same as the other priming areas, and the rest of the wipe will be performed inside the wipe tower.
+	// If false, the last priming are will be large enough to wipe the last extruder sufficiently.
+	bool 						last_wipe_inside_wipe_tower, 
+	// May be used by a stand alone post processor.
+	Purpose 					purpose)
+{
+	this->set_layer(first_layer_height, first_layer_height, tools.size(), true, false);
+
+	float wipe_area = m_wipe_area;
+	// Calculate the amount of wipe over the wipe tower brim following the prime, decrease wipe_area
+	// with the amount of material extruded over the brim.
+	{
+		// Simulate the brim extrusions, summ the length of the extrusion.
+		float e_length = this->tool_change(0, false, PURPOSE_EXTRUDE).total_extrusion_length_in_plane();
+		// Shrink wipe_area by the amount of extrusion extruded by the finish_layer().
+		// Y stepping of the wipe extrusions.
+		float dy = m_perimeter_width * 0.8f;
+		// Number of whole wipe lines, that would be extruded to wipe as much material as the finish_layer().
+		// Minimum wipe area is 5mm wide.
+		//FIXME calculate the purge_lines_width precisely.
+		float purge_lines_width = 1.3f;
+		wipe_area = std::max(5.f, m_wipe_area - float(floor(e_length / m_wipe_tower_width)) * dy - purge_lines_width);
+	}
+
+	this->set_layer(first_layer_height, first_layer_height, tools.size(), true, false);
+	this->m_num_layer_changes 	= 0;
+	this->m_current_tool 		= tools.front();
+
+    // The Prusa i3 MK2 has a working space of [0, -2.2] to [250, 210].
+    // Due to the XYZ calibration, this working space may shrink slightly from all directions,
+    // therefore the homing position is shifted inside the bed by 0.2 in the firmware to [0.2, -2.0].
+//	box_coordinates cleaning_box(xy(0.5f, - 1.5f), m_wipe_tower_width, wipe_area);
+	box_coordinates cleaning_box(xy(5.f, 0.f), m_wipe_tower_width, wipe_area);
+
+	PrusaMultiMaterial::Writer writer;
+	writer.set_extrusion_flow(m_extrusion_flow)
+		  .set_z(m_z_pos)
+		  .set_layer_height(m_layer_height)
+		  .set_initial_tool(m_current_tool)
+		  .append(";--------------------\n"
+			 	  "; CP PRIMING START\n")
+		  .append(";--------------------\n")
+		  .speed_override(100);
+
+	// Always move to the starting position.
+	writer.set_initial_position(xy(0.f, 0.f))
+		  .travel(cleaning_box.ld, 7200)
+	// Increase the extruder driver current to allow fast ramming.
+		  .set_extruder_trimpot(750);
+
+	if (purpose == PURPOSE_EXTRUDE || purpose == PURPOSE_MOVE_TO_TOWER_AND_EXTRUDE) {
+		float y_end = 0.f;
+		for (size_t idx_tool = 0; idx_tool < tools.size(); ++ idx_tool) {
+			unsigned int tool = tools[idx_tool];
+			// Select the tool, set a speed override for soluble and flex materials.
+			toolchange_Change(writer, tool, m_material[tool]);
+			// Prime the tool.
+			toolchange_Load(writer, cleaning_box);
+			if (idx_tool + 1 == tools.size()) {
+				// Last tool should not be unloaded, but it should be wiped enough to become of a pure color.
+				if (last_wipe_inside_wipe_tower) {
+					// Shrink the last wipe area to the area of the other purge areas,
+					// remember the last initial wipe width to be purged into the 1st layer of the wipe tower.
+					this->m_initial_extra_wipe = std::max(0.f, wipe_area - (y_end + 0.5f * 0.85f * m_perimeter_width - cleaning_box.ld.y));
+					cleaning_box.lu.y -= this->m_initial_extra_wipe;
+					cleaning_box.ru.y -= this->m_initial_extra_wipe;
+				}
+				toolchange_Wipe(writer, cleaning_box, false);
+			} else {
+				// Ram the hot material out of the melt zone, retract the filament into the cooling tubes and let it cool.
+				writer.travel(writer.x(), writer.y() + m_perimeter_width, 7200);
+				toolchange_Unload(writer, cleaning_box, m_material[m_current_tool], m_first_layer_temperature[tool]);
+				// Save the y end of the non-last priming area.
+				y_end = writer.y();
+			    cleaning_box.translate(m_wipe_tower_width, 0.f);
+				writer.travel(cleaning_box.ld, 7200);
+			}
+		    ++ m_num_tool_changes;
+		}
+	}
+
+	// Reset the extruder current to a normal value.
+	writer.set_extruder_trimpot(550)
+		  .feedrate(6000)
+		  .flush_planner_queue()
+		  .reset_extruder()
+		  .append("; CP PRIMING END\n"
+	 		      ";------------------\n"
+				  "\n\n");
+
+	// Force m_idx_tool_change_in_layer to -1, so that tool_change() will know to extrude the wipe tower brim.
+	m_idx_tool_change_in_layer = (unsigned int)(-1);
+
+	ToolChangeResult result;
+	result.print_z 	  	= this->m_z_pos;
+	result.layer_height = this->m_layer_height;
+	result.gcode   	  	= writer.gcode();
+	result.elapsed_time = writer.elapsed_time();
+	result.extrusions 	= writer.extrusions();
+	result.start_pos  	= writer.start_pos();
+	result.end_pos 	  	= writer.pos();
+	return result;
+}
+
+WipeTower::ToolChangeResult WipeTowerPrusaMM::tool_change(unsigned int tool, bool last_in_layer, Purpose purpose)
 {
 	// Either it is the last tool unload,
 	// or there must be a nonzero wipe tower partitions available.
-	assert(tool < 0 || it_layer_tools->wipe_tower_partitions > 0);
+//	assert(tool < 0 || it_layer_tools->wipe_tower_partitions > 0);
 
 	if (m_idx_tool_change_in_layer == (unsigned int)(-1)) {
 		// First layer, prime the extruder.
@@ -363,14 +496,7 @@ WipeTower::ToolChangeResult WipeTowerPrusaMM::tool_change(int tool, bool last_in
 				unsigned int old_idx_tool_change = m_idx_tool_change_in_layer;
 			    float old_wipe_start_y = m_current_wipe_start_y;
 			    m_current_wipe_start_y += wipe_area;
-				ToolChangeResult tcr = this->finish_layer(PURPOSE_EXTRUDE);
-				for (size_t i = 1; i < tcr.extrusions.size(); ++ i) {
-					const Extrusion &e = tcr.extrusions[i];
-					if (e.width > 0) {
-						xy v = e.pos - (&e - 1)->pos;
-						e_length += sqrt(v.x*v.x+v.y*v.y);
-					}
-				}
+				e_length = this->finish_layer(PURPOSE_EXTRUDE).total_extrusion_length_in_plane();
 				m_idx_tool_change_in_layer = old_idx_tool_change;
 				m_current_wipe_start_y = old_wipe_start_y;
 			}
@@ -431,16 +557,16 @@ WipeTower::ToolChangeResult WipeTowerPrusaMM::tool_change(int tool, bool last_in
 		// Increase the extruder driver current to allow fast ramming.
 		writer.set_extruder_trimpot(750);
 		// Ram the hot material out of the melt zone, retract the filament into the cooling tubes and let it cool.
-		toolchange_Unload(writer, cleaning_box, m_material[m_current_tool],
-			m_is_first_layer ? m_first_layer_temperature[tool]  : m_temperature[tool]);
 
-		if (tool >= 0) {
+		if (tool != (unsigned int)-1) {
+			toolchange_Unload(writer, cleaning_box, m_material[m_current_tool],
+				m_is_first_layer ? m_first_layer_temperature[tool] : m_temperature[tool]);
 			// This is not the last change.
 			// Change the tool, set a speed override for soluble and flex materials.
 			toolchange_Change(writer, tool, m_material[tool]);
 			toolchange_Load(writer, cleaning_box);
 			// Wipe the newly loaded filament until the end of the assigned wipe area.
-			toolchange_Wipe(writer, cleaning_box);
+			toolchange_Wipe(writer, cleaning_box, false);
 			// Draw a perimeter around cleaning_box and wipe.
 			box_coordinates box = cleaning_box;
 			if (m_current_shape == SHAPE_REVERSED) {
@@ -455,7 +581,8 @@ WipeTower::ToolChangeResult WipeTowerPrusaMM::tool_change(int tool, bool last_in
 			if (purpose == PURPOSE_MOVE_TO_TOWER_AND_EXTRUDE)
 				writer.travel(box.ru, 7200)
 			  		  .travel(box.lu);
-		}
+		} else
+			toolchange_Unload(writer, cleaning_box, m_material[m_current_tool], m_temperature[m_current_tool]);
 
 		// Reset the extruder current to a normal value.
 		writer.set_extruder_trimpot(550)
@@ -540,6 +667,21 @@ WipeTower::ToolChangeResult WipeTowerPrusaMM::toolchange_Brim(Purpose purpose, b
 			}
 		}
 
+		if (m_initial_extra_wipe > m_perimeter_width * 1.9f) {
+			box_coordinates cleaning_box(
+				m_wipe_tower_pos + xy(0.f, 0.5f * m_perimeter_width),
+				m_wipe_tower_width, 
+				m_initial_extra_wipe - m_perimeter_width);
+		    writer.travel(cleaning_box.ld + xy(m_perimeter_width, 0.5f * m_perimeter_width), 6000);
+			// Wipe the newly loaded filament until the end of the assigned wipe area.
+			toolchange_Wipe(writer, cleaning_box, true);
+			// Draw a perimeter around cleaning_box.
+			writer.travel(cleaning_box.lu, 7000)
+				  .extrude(cleaning_box.ld, 3200).extrude(cleaning_box.rd)
+				  .extrude(cleaning_box.ru).extrude(cleaning_box.lu);
+		    m_current_wipe_start_y = m_initial_extra_wipe;
+		}
+
 		// Move to the front left corner.
 		writer.travel(wipeTower_box.ld, 7000);
 
@@ -587,24 +729,27 @@ void WipeTowerPrusaMM::toolchange_Unload(
 	{
 	case ABS:
    		// ramming          start                    end                  y increment     amount feedrate
-		writer.ram(xl + m_perimeter_width * 2, xr - m_perimeter_width,     y_step * 0.2f, 0,  1.2f * e,  4000)
-			  .ram(xr - m_perimeter_width,     xl + m_perimeter_width,     y_step * 1.2f, e0, 1.6f * e,  4600)
-			  .ram(xl + m_perimeter_width * 2, xr - m_perimeter_width * 2, y_step * 1.2f, e0, 1.8f * e,  5000)
-			  .ram(xr - m_perimeter_width * 2, xl + m_perimeter_width * 2, y_step * 1.2f, e0, 1.8f * e,  5000);
+		writer.ram(xl + m_perimeter_width * 2, xr - m_perimeter_width,     y_step * 0.2f, 0,  1.2f  * e, 4000)
+			  .ram(xr - m_perimeter_width,     xl + m_perimeter_width,     y_step * 1.2f, e0, 1.6f  * e, 4600)
+			  .ram(xl + m_perimeter_width * 2, xr - m_perimeter_width * 2, y_step * 1.2f, e0, 1.8f  * e, 5000)
+			  .ram(xr - m_perimeter_width * 2, xl + m_perimeter_width * 2, y_step * 1.2f, e0, 1.8f  * e, 5000);
 		break;
 	case PVA:
-		writer.ram(xl + m_perimeter_width * 2, xr - m_perimeter_width,     y_step * 0.2f, 0,  3,     4000)
-			  .ram(xr - m_perimeter_width,     xl + m_perimeter_width,     y_step * 1.5f, 0,  3,     4500)
-			  .ram(xl + m_perimeter_width * 2, xr - m_perimeter_width * 2, y_step * 1.5f, 0,  3,     4800)
-			  .ram(xr - m_perimeter_width,     xl + m_perimeter_width,     y_step * 1.5f, 0,  3,     5000);
+		// Used for the PrimaSelect PVA
+		writer.ram(xl + m_perimeter_width * 2, xr - m_perimeter_width,     y_step * 0.2f, 0,  1.75f * e, 4000)
+			  .ram(xr - m_perimeter_width,     xl + m_perimeter_width,     y_step * 1.5f, 0,  1.75f * e, 4500)
+			  .ram(xl + m_perimeter_width * 2, xr - m_perimeter_width * 2, y_step * 1.5f, 0,  1.75f * e, 4800)
+			  .ram(xr - m_perimeter_width,     xl + m_perimeter_width,     y_step * 1.5f, 0,  1.75f * e, 5000);
 		break;
 	case SCAFF:
-		writer.ram(xl + m_perimeter_width * 2, xr - m_perimeter_width,     y_step * 2.f,  0,  3,     4000)
-			  .ram(xr - m_perimeter_width,     xl + m_perimeter_width,     y_step * 3.f,  0,  4,     4600)
-			  .ram(xl + m_perimeter_width * 2, xr - m_perimeter_width * 2, y_step * 3.f,  0,  4.5,   5200);
+		writer.ram(xl + m_perimeter_width * 2, xr - m_perimeter_width,     y_step * 2.f,  0,  1.75f * e, 4000)
+			  .ram(xr - m_perimeter_width,     xl + m_perimeter_width,     y_step * 3.f,  0,  2.34f * e, 4600)
+			  .ram(xl + m_perimeter_width * 2, xr - m_perimeter_width * 2, y_step * 3.f,  0,  2.63f * e, 5200);
 		break;
 	default:
-		writer.ram(xl + m_perimeter_width * 2, xr - m_perimeter_width,     y_step * 0.2f, 0,  1.6f  * e, 4000)
+		// PLA, PLA/PHA and others
+		// Used for the Verbatim BVOH, PET, NGEN, co-polyesters
+		writer.ram(xl + m_perimeter_width * 2, xr - m_perimeter_width,     y_step * 0.2f, 0,  1.60f * e, 4000)
 			  .ram(xr - m_perimeter_width,     xl + m_perimeter_width,     y_step * 1.2f, e0, 1.65f * e, 4600)
 			  .ram(xl + m_perimeter_width * 2, xr - m_perimeter_width * 2, y_step * 1.2f, e0, 1.74f * e, 5200);
 	}
@@ -624,12 +769,6 @@ void WipeTowerPrusaMM::toolchange_Unload(
 		  .suppress_preview();
 	switch (current_material)
 	{
-	case ABS:
-		writer.cool(xl, xr, 3, -5, 1600)
-			  .cool(xl, xr, 5, -5, 2000)
-			  .cool(xl, xr, 5, -5, 2400)
-			  .cool(xl, xr, 5, -3, 2400);
-		break;
 	case PVA:
 		writer.cool(xl, xr, 3, -5, 1600)
 			  .cool(xl, xr, 5, -5, 2000)
@@ -659,8 +798,8 @@ void WipeTowerPrusaMM::toolchange_Unload(
 // Change the tool, set a speed override for solube and flex materials.
 void WipeTowerPrusaMM::toolchange_Change(
 	PrusaMultiMaterial::Writer &writer,
-	const int 		new_tool, 
-	material_type 	new_material)
+	const unsigned int 	new_tool, 
+	material_type 		new_material)
 {
 	// Speed override for the material. Go slow for flex and soluble materials.
 	int speed_override;
@@ -682,13 +821,19 @@ void WipeTowerPrusaMM::toolchange_Load(
 {
 	float xl = cleaning_box.ld.x + m_perimeter_width;
 	float xr = cleaning_box.rd.x - m_perimeter_width;
+	//FIXME flipping left / right side, so that the following toolchange_Wipe will start
+	// where toolchange_Load ends. 
+	std::swap(xl, xr);
 
 	writer.append("; CP TOOLCHANGE LOAD\n")
 	// Load the filament while moving left / right,
 	// so the excess material will not create a blob at a single position.
 		  .suppress_preview()
+		  // Accelerate the filament loading
 		  .load_move_x(xr, 20, 1400)
+		  // Fast loading phase
 		  .load_move_x(xl, 40, 3000)
+		  // Slowing down
 		  .load_move_x(xr, 20, 1600)
 		  .load_move_x(xl, 10, 1000)
 		  .resume_preview();
@@ -712,7 +857,8 @@ void WipeTowerPrusaMM::toolchange_Load(
 // Wipe the newly loaded filament until the end of the assigned wipe area.
 void WipeTowerPrusaMM::toolchange_Wipe(
 	PrusaMultiMaterial::Writer &writer,
-	const box_coordinates  &cleaning_box)
+	const box_coordinates  &cleaning_box,
+	bool skip_initial_y_move)
 {
 	// Increase flow on first layer, slow down print.
 	writer.set_extrusion_flow(m_extrusion_flow * (m_is_first_layer ? 1.18f : 1.f))
@@ -726,23 +872,27 @@ void WipeTowerPrusaMM::toolchange_Wipe(
 	float wipe_speed_max = 4800.f;
 	// Y increment per wipe line.
 	float dy = ((m_current_shape == SHAPE_NORMAL) ? 1.f : -1.f) * m_perimeter_width * 0.8f;
-	for (bool p = true; ; p = ! p) {
+	for (bool p = true; 
+		// Next wipe line fits the cleaning box.
+		((m_current_shape == SHAPE_NORMAL) ?
+			(writer.y() <= cleaning_box.lu.y - m_perimeter_width) :
+			(writer.y() >= cleaning_box.ld.y + m_perimeter_width));
+		p = ! p)
+	{
 		wipe_speed = std::min(wipe_speed_max, wipe_speed + wipe_speed_inc);
-		if (p) {
-			writer.extrude(xl - m_perimeter_width / 2, writer.y() + dy, wipe_speed * wipe_coeff);
-			writer.extrude(xr + m_perimeter_width,     writer.y());
-		} else {
-			writer.extrude(xl - m_perimeter_width,     writer.y() + dy, wipe_speed * wipe_coeff);
-			writer.extrude(xr + m_perimeter_width * 2, writer.y());
-		}
-		wipe_speed = std::min(wipe_speed_max, wipe_speed + wipe_speed_inc);
-		writer.extrude(xr + m_perimeter_width, writer.y() + dy, wipe_speed * wipe_coeff);
-		writer.extrude(xl - m_perimeter_width, writer.y());
+		if (skip_initial_y_move)
+			skip_initial_y_move = false;
+		else
+			writer.extrude(xl - (p ? m_perimeter_width / 2 : m_perimeter_width), writer.y() + dy, wipe_speed * wipe_coeff);
+		writer.extrude(xr + (p ? m_perimeter_width : m_perimeter_width * 2), writer.y(), wipe_speed * wipe_coeff);
+		// Next wipe line fits the cleaning box.
 		if ((m_current_shape == SHAPE_NORMAL) ?
 			(writer.y() > cleaning_box.lu.y - m_perimeter_width) :
 			(writer.y() < cleaning_box.ld.y + m_perimeter_width))
-			// Next wipe line does not fit the cleaning box.
 			break;
+		wipe_speed = std::min(wipe_speed_max, wipe_speed + wipe_speed_inc);
+		writer.extrude(xr + m_perimeter_width, writer.y() + dy, wipe_speed * wipe_coeff);
+		writer.extrude(xl - m_perimeter_width, writer.y());
 	}
 	// Reset the extrusion flow.
 	writer.set_extrusion_flow(m_extrusion_flow);

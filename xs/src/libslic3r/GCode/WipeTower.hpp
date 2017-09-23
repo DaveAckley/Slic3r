@@ -89,11 +89,36 @@ public:
 		// Time elapsed over this tool change.
 		// This is useful not only for the print time estimation, but also for the control of layer cooling.
 		float  				    elapsed_time;
+
+		// Sum the total length of the extrusion.
+		float total_extrusion_length_in_plane() {
+			float e_length = 0.f;
+			for (size_t i = 1; i < this->extrusions.size(); ++ i) {
+				const Extrusion &e = this->extrusions[i];
+				if (e.width > 0) {
+					xy v = e.pos - (&e - 1)->pos;
+					e_length += sqrt(v.x*v.x+v.y*v.y);
+				}
+			}
+			return e_length;
+		}
 	};
+
+	// Returns gcode to prime the nozzles at the front edge of the print bed.
+	virtual ToolChangeResult prime(
+		// print_z of the first layer.
+		float 						first_layer_height, 
+		// Extruder indices, in the order to be primed. The last extruder will later print the wipe tower brim, print brim and the object.
+		std::vector<unsigned int> 	tools,
+		// If true, the last priming are will be the same as the other priming areas, and the rest of the wipe will be performed inside the wipe tower.
+		// If false, the last priming are will be large enough to wipe the last extruder sufficiently.
+		bool 						last_wipe_inside_wipe_tower, 
+		// May be used by a stand alone post processor.
+		Purpose 					purpose = PURPOSE_MOVE_TO_TOWER_AND_EXTRUDE) = 0;
 
 	// Returns gcode for toolchange and the end position.
 	// if new_tool == -1, just unload the current filament over the wipe tower.
-	virtual ToolChangeResult tool_change(int new_tool, bool last_in_layer, Purpose purpose = PURPOSE_MOVE_TO_TOWER_AND_EXTRUDE) = 0;
+	virtual ToolChangeResult tool_change(unsigned int new_tool, bool last_in_layer, Purpose purpose = PURPOSE_MOVE_TO_TOWER_AND_EXTRUDE) = 0;
 
 	// Close the current wipe tower layer with a perimeter and possibly fill the unfilled space with a zig-zag.
 	// Call this method only if layer_finished() is false.

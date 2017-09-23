@@ -158,6 +158,7 @@ public:
     BoundingBoxf3 bounding_box() const {
         BoundingBoxf3 bbox;
         if (! this->vertices_and_normals_interleaved.empty()) {
+            bbox.defined = true;
             bbox.min.x = bbox.max.x = this->vertices_and_normals_interleaved[3];
             bbox.min.y = bbox.max.y = this->vertices_and_normals_interleaved[4];
             bbox.min.z = bbox.max.z = this->vertices_and_normals_interleaved[5];
@@ -207,8 +208,8 @@ public:
         drag_group_id(-1),
         selected(false),
         hover(false),
-        qverts_range(0, size_t(-1)),
-        tverts_range(0, size_t(-1))
+        tverts_range(0, size_t(-1)),
+        qverts_range(0, size_t(-1))
     {
         color[0] = r;
         color[1] = g;
